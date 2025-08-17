@@ -5,6 +5,7 @@ import { Profile } from './pages/Profile.jsx'
 import { Applications } from './pages/Applications.jsx'
 import { AppDetail } from './pages/AppDetail.jsx'
 import { Login } from './pages/Login.jsx'
+import { Landing } from './pages/Landing.jsx'
 import { Nav } from './components/Nav.jsx'
 import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabaseClient.js'
@@ -14,7 +15,7 @@ function App() {
     <div className="min-h-screen bg-gray-50">
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
           <Route element={<ProtectedLayout />}>
             <Route path="/dashboard" element={<Dashboard />} />
