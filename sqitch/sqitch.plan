@@ -1,0 +1,5 @@
+%syntax-version=1.0.0
+%project=supakey
+
+init 2025-08-17T18:20:06Z System Administrator <root@medha> # Initial schema for SuperKey application
+edge-function 2025-08-17T18:20:12Z System Administrator <root@medha> # Add Supabase Edge Function for running migrations
