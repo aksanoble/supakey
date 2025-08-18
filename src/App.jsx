@@ -4,7 +4,6 @@ import { Dashboard } from './pages/Dashboard.jsx'
 import { Profile } from './pages/Profile.jsx'
 import { Applications } from './pages/Applications.jsx'
 import { AppDetail } from './pages/AppDetail.jsx'
-import { Login } from './pages/Login.jsx'
 import { Landing } from './pages/Landing.jsx'
 import { Nav } from './components/Nav.jsx'
 import { useEffect, useState } from 'react'
@@ -16,7 +15,6 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Landing />} />
-          <Route path="/login" element={<Login />} />
           <Route element={<ProtectedLayout />}>
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/profile" element={<Profile />} />
@@ -59,7 +57,7 @@ function ProtectedLayout() {
 		)
 	}
 	if (!isAuthed) {
-		return <Navigate to="/login" replace />
+		return <Navigate to="/" replace />
 	}
 
 	return (
