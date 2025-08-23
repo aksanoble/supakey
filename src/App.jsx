@@ -6,64 +6,53 @@ import { Applications } from './pages/Applications.jsx'
 import { AppDetail } from './pages/AppDetail.jsx'
 import { Landing } from './pages/Landing.jsx'
 import { Nav } from './components/Nav.jsx'
-import { useEffect, useState } from 'react'
-import { supabase } from './lib/supabaseClient.js'
+import { AuthProvider, useAuth } from './lib/AuthContext.jsx'
 
 function App() {
   return (
-    <div className="min-h-screen bg-gray-50">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route element={<ProtectedLayout />}>
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/profile" element={<Profile />} />
-            <Route path="/applications" element={<Applications />} />
-            <Route path="/applications/:appId" element={<AppDetail />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+    <AuthProvider>
+      <div className="min-h-screen bg-gray-50">
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Landing />} />
+            <Route path="/" element={<ProtectedRoute />}>
+              <Route index element={<Dashboard />} />
+              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="profile" element={<Profile />} />
+              <Route path="applications" element={<Applications />} />
+              <Route path="applications/:appId" element={<AppDetail />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </div>
+    </AuthProvider>
+  )
+}
+
+function ProtectedRoute() {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="mt-4 text-gray-500">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+
+  return (
+    <div>
+      <Nav />
+      <Outlet />
     </div>
   )
 }
 
 export default App
-
-function ProtectedLayout() {
-	const [loading, setLoading] = useState(true)
-	const [isAuthed, setIsAuthed] = useState(false)
-
-	useEffect(() => {
-		async function init() {
-			const { data: { session } } = await supabase.auth.getSession()
-			setIsAuthed(Boolean(session))
-			setLoading(false)
-		}
-		init()
-		const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-			setIsAuthed(Boolean(session))
-		})
-		return () => sub.subscription.unsubscribe()
-	}, [])
-
-	if (loading) {
-		return (
-			<div className="min-h-screen flex items-center justify-center bg-gray-50">
-				<div className="text-center">
-					<div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-					<p className="mt-4 text-gray-500">Loading...</p>
-				</div>
-			</div>
-		)
-	}
-	if (!isAuthed) {
-		return <Navigate to="/" replace />
-	}
-
-	return (
-		<div>
-			<Nav />
-			<Outlet />
-		</div>
-	)
-}

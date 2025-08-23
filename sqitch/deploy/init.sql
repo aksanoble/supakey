@@ -19,12 +19,12 @@ SET search_path TO supakey, public;
 create table if not exists supakey.user_connections (
 	id uuid primary key default gen_random_uuid(),
 	user_id uuid not null references auth.users(id) on delete cascade,
-	name text not null,
 	postgres_url text,
 	supabase_url text,
 	supabase_service_role text,
 	created_at timestamptz default now(),
-	updated_at timestamptz default now()
+	updated_at timestamptz default now(),
+	unique(user_id)
 );
 
 create table if not exists supakey.application_accounts (
@@ -49,7 +49,8 @@ create table if not exists supakey.application_migrations (
 	id uuid primary key default gen_random_uuid(),
 	application_id uuid not null references supakey.applications(id) on delete cascade,
 	name text not null,
-	run_on timestamptz default now()
+	run_on timestamptz default now(),
+	unique(application_id, name)
 );
 
 -- For RLS, enable and add policies allowing users to access their rows

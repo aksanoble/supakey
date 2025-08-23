@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabaseClient'
+import { useAuth } from '../lib/AuthContext'
 
 export function Landing() {
 	const [form, setForm] = useState({
@@ -10,30 +10,29 @@ export function Landing() {
 	const [message, setMessage] = useState('')
 	const [loading, setLoading] = useState(false)
 	const navigate = useNavigate()
+	const { user, signIn } = useAuth()
+
+	// Redirect if already authenticated
+	useEffect(() => {
+		if (user) {
+			navigate('/')
+		}
+	}, [user, navigate])
 
 	async function onSubmit(e) {
 		e.preventDefault()
 		setLoading(true)
 		setMessage('')
 		
-		try {
-			const { data, error } = await supabase.auth.signInWithPassword({
-				email: form.email,
-				password: form.password,
-			})
-			
-			if (error) {
-				setMessage(`Error: ${error.message}`)
-			} else if (data.user) {
-				setMessage('Sign in successful! Redirecting to dashboard...')
-				setTimeout(() => {
-					navigate('/dashboard')
-				}, 1000)
-			} else {
-				setMessage('Error: No user data returned from authentication')
-			}
-		} catch (err) {
-			setMessage(`Unexpected error: ${err.message}`)
+		const { data, error } = await signIn(form.email, form.password)
+		
+		if (error) {
+			setMessage(`Error: ${error.message}`)
+		} else if (data.user) {
+			setMessage('Sign in successful! Redirecting to dashboard...')
+			navigate('/')
+		} else {
+			setMessage('Error: No user data returned from authentication')
 		}
 		
 		setLoading(false)
@@ -52,10 +51,10 @@ export function Landing() {
 							Self hosting made simple.
 						</p>
 						<p className="text-xl font-medium mb-4">
-							You keep the data.
+							Your data belongs to you.
 						</p>
 						<p className="text-xl font-medium">
-							They bring the views.
+							Apps are just views.
 						</p>
 					</div>
 					
@@ -185,7 +184,7 @@ export function Landing() {
 											message.includes('successful') || message.includes('created') || message.includes('verify')
 												? 'text-green-800' 
 												: 'text-red-800'
-										}`}>
+											}`}>
 											{message}
 										</p>
 									</div>
