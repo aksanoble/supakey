@@ -115,3 +115,5 @@ sqitch.conf
 .local/
 
 *.temp
+
+claude.md

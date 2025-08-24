@@ -22,6 +22,156 @@ interface AuthResponse {
   applicationId: string
 }
 
+// Helper function to create auth user
+async function createAuthUser(targetAdminClient: any, userEmail: string, userPassword: string, applicationName: string, schemaName: string) {
+  console.log('Creating Supabase auth user via admin API')
+  
+  const { data: newUser, error: createUserError } = await targetAdminClient.auth.admin.createUser({
+    email: userEmail,
+    password: userPassword,
+    email_confirm: true,
+    user_metadata: {
+      application: applicationName,
+      schema: schemaName
+    },
+    app_metadata: {
+      provider: 'email',
+      providers: ['email']
+    }
+  })
+  
+  if (createUserError) {
+    throw new Error(`Failed to create auth user: ${createUserError.message}`)
+  }
+  
+  console.log(`Auth user created via admin API: ${userEmail}, ID: ${newUser.user.id}`)
+  return newUser.user.id
+}
+
+// Helper function to update PostgREST configuration with retry logic
+async function updatePostgRESTConfigWithRetry(platformApiToken: string, supabaseUrl: string, newSchema: string): Promise<void> {
+  try {
+    await updatePostgRESTConfig(platformApiToken, supabaseUrl, newSchema)
+    console.log('PostgREST configuration updated successfully')
+  } catch (error) {
+    console.error('PostgREST configuration update failed:', error.message)
+    // Don't fail the entire operation, but log the error
+  }
+}
+
+// Function to update PostgREST configuration via Supabase Platform API
+async function updatePostgRESTConfig(platformApiToken: string, supabaseUrl: string, newSchema: string): Promise<void> {
+  try {
+    // Extract project ID from Supabase URL
+    const urlPattern = /https:\/\/([a-zA-Z0-9]+)\.supabase\.co/
+    const match = supabaseUrl.match(urlPattern)
+    if (!match) {
+      throw new Error('Invalid Supabase URL format')
+    }
+    const projectId = match[1]
+    
+    console.log(`Updating PostgREST config for project: ${projectId}, adding schema: ${newSchema}`)
+    
+    // Get current PostgREST configuration using Platform API token
+    const getResponse = await fetch(`https://api.supabase.com/v1/projects/${projectId}/postgrest`, {
+      method: 'GET',
+      headers: {
+        'authorization': `Bearer ${platformApiToken}`,
+        'accept': 'application/json',
+        'content-type': 'application/json'
+      }
+    })
+    
+    if (!getResponse.ok) {
+      const errorText = await getResponse.text()
+      console.error(`Platform API GET failed: ${getResponse.status} - ${errorText}`)
+      throw new Error(`Failed to get PostgREST config: ${getResponse.status} - ${errorText}`)
+    }
+    
+    const currentConfig = await getResponse.json()
+    console.log('Current PostgREST config:', currentConfig)
+    
+    // Parse current db_schema to add the new schema
+    const currentSchemas = currentConfig.db_schema ? currentConfig.db_schema.split(',').map((s: string) => s.trim()) : ['public']
+    
+    // Add the new schema if it's not already included
+    if (!currentSchemas.includes(newSchema)) {
+      currentSchemas.push(newSchema)
+    } else {
+      console.log(`Schema ${newSchema} already included in PostgREST config`)
+      return
+    }
+    
+    const updatedSchemas = currentSchemas.join(', ')
+    
+    // Update the PostgREST configuration
+    const updatePayload = {
+      db_schema: updatedSchemas,
+      max_rows: currentConfig.max_rows || 1000,
+      db_extra_search_path: currentConfig.db_extra_search_path || 'public, extensions'
+    }
+    
+    console.log('Updating PostgREST config with payload:', updatePayload)
+    
+    const updateResponse = await fetch(`https://api.supabase.com/v1/projects/${projectId}/postgrest`, {
+      method: 'PATCH',
+      headers: {
+        'authorization': `Bearer ${platformApiToken}`,
+        'accept': 'application/json',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(updatePayload)
+    })
+    
+    if (!updateResponse.ok) {
+      const errorText = await updateResponse.text()
+      console.error(`Platform API PATCH failed: ${updateResponse.status} - ${errorText}`)
+      throw new Error(`Failed to update PostgREST config: ${updateResponse.status} - ${errorText}`)
+    }
+    
+    const updateResult = await updateResponse.json()
+    console.log(`Successfully updated PostgREST configuration:`, updateResult)
+    
+  } catch (error) {
+    console.error('Error updating PostgREST config:', error)
+    console.warn('Warning: PostgREST config update failed, but schema grants will still be applied')
+    // Don't throw - let the function continue with grants
+  }
+}
+
+// Function to apply grants to make schema available over public API
+async function applySchemaGrants(client: any, schemaName: string): Promise<void> {
+  try {
+    console.log(`Applying grants for schema: ${schemaName}`)
+    
+    const grantStatements = [
+      `GRANT USAGE ON SCHEMA ${schemaName} TO anon, authenticated, service_role;`,
+      `GRANT ALL ON ALL TABLES IN SCHEMA ${schemaName} TO anon, authenticated, service_role;`,
+      `GRANT ALL ON ALL ROUTINES IN SCHEMA ${schemaName} TO anon, authenticated, service_role;`,
+      `GRANT ALL ON ALL SEQUENCES IN SCHEMA ${schemaName} TO anon, authenticated, service_role;`,
+      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${schemaName} GRANT ALL ON TABLES TO anon, authenticated, service_role;`,
+      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${schemaName} GRANT ALL ON ROUTINES TO anon, authenticated, service_role;`,
+      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${schemaName} GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;`
+    ]
+    
+    for (const statement of grantStatements) {
+      try {
+        await client.queryObject(statement)
+        console.log(`Executed grant: ${statement}`)
+      } catch (grantError) {
+        console.warn(`Warning - Grant statement failed (may be expected): ${statement}`, grantError.message)
+        // Don't throw here as some grants might fail if no objects exist yet
+      }
+    }
+    
+    console.log(`Successfully applied grants for schema: ${schemaName}`)
+    
+  } catch (error) {
+    console.error('Error applying schema grants:', error)
+    throw error
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -101,7 +251,9 @@ serve(async (req) => {
         id,
         postgres_url,
         supabase_url,
-        supabase_service_role
+        supabase_service_role,
+        personal_access_token,
+        user_service_key
       `)
       .eq('user_id', user.id)
       .single()
@@ -253,37 +405,13 @@ serve(async (req) => {
         // Create Supabase admin client for target database to create auth user properly
         const targetAdminClient = createClient(
           userConnection.supabase_url, 
-          userConnection.supabase_service_role
+          userConnection.user_service_key
         )
         
-        // Create a real Supabase auth user using admin API
-        console.log('Creating real Supabase auth user via admin API')
-        
+        // Create auth user
         const userEmail = `${username}@app.local`
         const userPassword = password
-        
-        // Create user using Supabase admin API
-        const { data: newUser, error: createUserError } = await targetAdminClient.auth.admin.createUser({
-          email: userEmail,
-          password: userPassword,
-          email_confirm: true, // Auto-confirm the email
-          user_metadata: {
-            application: applicationName,
-            schema: schemaName
-          },
-          app_metadata: {
-            provider: 'email',
-            providers: ['email']
-          }
-        })
-        
-        if (createUserError) {
-          console.error('Failed to create auth user:', createUserError)
-          throw new Error(`Failed to create auth user: ${createUserError.message}`)
-        }
-        
-        const authUserId = newUser.user.id
-        console.log(`Auth user created via admin API: ${userEmail}, ID: ${authUserId}`)
+        const authUserId = await createAuthUser(targetAdminClient, userEmail, userPassword, applicationName, schemaName)
         
         // Configure schema for Supabase API access
         try {
@@ -301,10 +429,15 @@ serve(async (req) => {
           await client.queryObject(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaName} GRANT ALL ON TABLES TO authenticator;`)
           
           console.log(`Schema ${schemaName} configured for Supabase API access`)
-          
-        } catch (schemaError) {
-          console.log('Schema configuration error:', schemaError.message)
-        }
+        
+          // Update PostgREST configuration and apply grants
+          await updatePostgRESTConfigWithRetry(userConnection.personal_access_token, userConnection.supabase_url, schemaName)
+          await applySchemaGrants(client, schemaName)
+        
+      } catch (schemaError) {
+        console.error('Schema configuration error:', schemaError.message)
+        throw schemaError  // Re-throw to fail the operation if schema setup fails
+      }
         
         // Update the application records in memory
         application.application_accounts = {
@@ -331,6 +464,16 @@ serve(async (req) => {
       } else {
         console.log(`Using existing application schema: ${schemaName}`)
         
+        // For existing applications, ensure PostgREST config and grants are up to date
+        await updatePostgRESTConfigWithRetry(userConnection.personal_access_token, userConnection.supabase_url, schemaName)
+        
+        try {
+          await applySchemaGrants(client, schemaName)
+          console.log(`Updated grants for existing schema: ${schemaName}`)
+        } catch (grantsError) {
+          console.error('Grants update failed for existing schema:', grantsError.message)
+        }
+        
         // Get the stored auth user info
         const authUserEmail = application.application_accounts.application_username
         const storedPassword = application.application_accounts.application_password  // This is the actual password
@@ -338,7 +481,7 @@ serve(async (req) => {
         // Create admin client for target database
         const targetAdminClient = createClient(
           userConnection.supabase_url, 
-          userConnection.supabase_service_role
+          userConnection.user_service_key
         )
         
         // For existing applications, try to sign in to verify the user exists
@@ -352,22 +495,13 @@ serve(async (req) => {
             console.log('Auth user sign in failed, may need recreation. Error:', signInError?.message)
             
             // Try to recreate user using admin API
-            const { data: recreatedUser, error: recreateError } = await targetAdminClient.auth.admin.createUser({
-              email: authUserEmail,
-              password: storedPassword,
-              email_confirm: true,
-              user_metadata: {
-                application: applicationName,
-                schema: schemaName
-              }
-            })
-            
-            if (recreateError) {
+            try {
+              await createAuthUser(targetAdminClient, authUserEmail, storedPassword, applicationName, schemaName)
+              console.log('Auth user recreated successfully')
+            } catch (recreateError) {
               console.log('Failed to recreate auth user:', recreateError.message)
-              throw new Error(`Failed to recreate auth user: ${recreateError.message}`)
+              throw recreateError
             }
-            
-            console.log('Auth user recreated via admin API successfully')
           } else {
             console.log('Auth user verified successfully via sign in')
           }
@@ -439,6 +573,9 @@ serve(async (req) => {
             `)
             
             console.log(`RLS policies configured for migration ${migration.name}`)
+
+            // Apply grants after each migration to ensure new objects are accessible
+            await applySchemaGrants(client, schemaName)
 
             // Record the migration as deployed in sqitch
             const changeId = `${migration.name}-${Date.now()}`

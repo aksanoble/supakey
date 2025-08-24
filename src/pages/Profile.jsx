@@ -6,6 +6,8 @@ export function Profile() {
 		postgres_url: '',
 		supabase_url: '',
 		supabase_service_role: '',
+		personal_access_token: '',
+		user_service_key: '',
 	})
 	const [loading, setLoading] = useState(false)
 	const [message, setMessage] = useState('')
@@ -28,6 +30,8 @@ export function Profile() {
 					postgres_url: data.postgres_url || '',
 					supabase_url: data.supabase_url || '',
 					supabase_service_role: data.supabase_service_role || '',
+					personal_access_token: data.personal_access_token || '',
+					user_service_key: data.user_service_key || '',
 				})
 			}
 		}
@@ -50,6 +54,8 @@ export function Profile() {
 			postgres_url: form.postgres_url || null,
 			supabase_url: form.supabase_url || null,
 			supabase_service_role: form.supabase_service_role || null,
+			personal_access_token: form.personal_access_token || null,
+			user_service_key: form.user_service_key || null,
 		}
 		const { error } = await supabase.from('user_connections').upsert(upsertPayload, { onConflict: 'user_id' })
 		setLoading(false)
@@ -102,6 +108,34 @@ export function Profile() {
 									placeholder="service_role_key"
 									className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
 								/>
+							</div>
+							<div>
+								<label htmlFor="personal_access_token" className="block text-sm font-medium text-gray-700">
+									Personal Access Token (for Platform API)
+								</label>
+								<input
+									id="personal_access_token"
+									type="password"
+									value={form.personal_access_token}
+									onChange={(e) => setForm({ ...form, personal_access_token: e.target.value })}
+									placeholder="sbp_xxxxxxxxxxxx"
+									className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+								/>
+								<p className="mt-1 text-xs text-gray-500">Used to configure PostgREST schemas via Supabase Platform API</p>
+							</div>
+							<div>
+								<label htmlFor="user_service_key" className="block text-sm font-medium text-gray-700">
+									User Service Key (for Auth API)
+								</label>
+								<input
+									id="user_service_key"
+									type="password"
+									value={form.user_service_key}
+									onChange={(e) => setForm({ ...form, user_service_key: e.target.value })}
+									placeholder="sb_secret_xxxxxxxxxxxx"
+									className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+								/>
+								<p className="mt-1 text-xs text-gray-500">Used to create auth users via Supabase Admin API</p>
 							</div>
 							<div>
 								<button
