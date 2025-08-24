@@ -5,3 +5,4 @@ init 2025-08-17T18:20:06Z System Administrator <root@medha> # Initial schema for
 edge-function 2025-08-17T18:20:12Z System Administrator <root@medha> # Add Supabase Edge Function for running migrations
 add_user_connections_unique_constraint 2025-08-20T18:08:51Z System Administrator <root@medha> # Add unique constraint on user_id in user_connections table
 remove_name_from_user_connections 2025-08-20T18:11:16Z System Administrator <root@medha> # Remove name column from user_connections table
+fix_application_accounts_rls 2025-08-24T08:47:00Z System Administrator <root@medha> # Fix RLS policies for application_accounts to allow edge function operations
