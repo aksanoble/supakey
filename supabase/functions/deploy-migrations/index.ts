@@ -251,9 +251,8 @@ serve(async (req) => {
         id,
         postgres_url,
         supabase_url,
-        supabase_service_role,
-        personal_access_token,
-        user_service_key
+        supabase_secret_key,
+        personal_access_token
       `)
       .eq('user_id', user.id)
       .single()
@@ -405,7 +404,7 @@ serve(async (req) => {
         // Create Supabase admin client for target database to create auth user properly
         const targetAdminClient = createClient(
           userConnection.supabase_url, 
-          userConnection.user_service_key
+          userConnection.supabase_secret_key
         )
         
         // Create auth user
@@ -481,7 +480,7 @@ serve(async (req) => {
         // Create admin client for target database
         const targetAdminClient = createClient(
           userConnection.supabase_url, 
-          userConnection.user_service_key
+          userConnection.supabase_secret_key
         )
         
         // For existing applications, try to sign in to verify the user exists
@@ -619,7 +618,7 @@ serve(async (req) => {
     // Create Supabase client for the target database to generate real auth tokens
     const targetSupabase = createClient(
       userConnection.supabase_url, 
-      userConnection.supabase_service_role
+      userConnection.supabase_secret_key
     )
     
     // Get the auth user email and password from the application account
