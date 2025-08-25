@@ -15,7 +15,16 @@ export function Landing() {
 	// Redirect if already authenticated
 	useEffect(() => {
 		if (user) {
-			navigate('/')
+			// Check if there are stored OAuth parameters
+			const storedOAuthParams = sessionStorage.getItem('oauth_params')
+			if (storedOAuthParams) {
+				// Clear the stored params and redirect to OAuth authorize
+				sessionStorage.removeItem('oauth_params')
+				const params = new URLSearchParams(JSON.parse(storedOAuthParams))
+				navigate(`/oauth/authorize?${params.toString()}`)
+			} else {
+				navigate('/')
+			}
 		}
 	}, [user, navigate])
 
@@ -29,14 +38,15 @@ export function Landing() {
 		if (error) {
 			setMessage(`Error: ${error.message}`)
 		} else if (data.user) {
-			setMessage('Sign in successful! Redirecting to dashboard...')
-			navigate('/')
+			setMessage('Sign in successful! Redirecting...')
+			// Redirect will be handled by the useEffect above after user state updates
 		} else {
 			setMessage('Error: No user data returned from authentication')
 		}
 		
 		setLoading(false)
 	}
+
 
 	return (
 		<div className="min-h-screen bg-gray-50 flex">

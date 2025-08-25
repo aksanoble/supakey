@@ -10,3 +10,5 @@ add_user_tokens_to_connections 2025-08-24T11:15:11Z System Administrator <root@m
 cleanup_service_keys 2025-08-24T12:43:26Z System Administrator <root@medha> # Remove user_service_key and rename supabase_service_role to supabase_secret_key
 add_app_identifier_to_applications 2025-01-27T00:00:00Z System Administrator <root@medha> # Add app_identifier column to applications table
 add_supabase_anon_key_to_user_connections 2025-08-25T12:00:00Z System Administrator <root@medha> # Add supabase_anon_key column to user_connections table
+add_oauth_tables 2025-08-25T13:00:00Z System Administrator <root@medha> # Add OAuth client, consent, and code tables
+add_oauth_client_registration_policy 2025-08-25T18:32:28Z System Administrator <root@medha> # Add policy to allow dynamic OAuth client registration

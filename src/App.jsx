@@ -5,6 +5,7 @@ import { Profile } from './pages/Profile.jsx'
 import { Applications } from './pages/Applications.jsx'
 import { AppDetail } from './pages/AppDetail.jsx'
 import { Landing } from './pages/Landing.jsx'
+import { OAuthAuthorize } from './pages/OAuthAuthorize.jsx'
 import { Nav } from './components/Nav.jsx'
 import { AuthProvider, useAuth } from './lib/AuthContext.jsx'
 
@@ -15,6 +16,7 @@ function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Landing />} />
+            <Route path="/oauth/authorize" element={<OAuthAuthorize />} />
             <Route path="/" element={<ProtectedRoute />}>
               <Route index element={<Dashboard />} />
               <Route path="dashboard" element={<Dashboard />} />

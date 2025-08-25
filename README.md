@@ -81,3 +81,31 @@ The application uses a custom `supakey` schema with the following tables:
 - `application_migrations` - Migration tracking per application
 
 All tables have Row Level Security (RLS) enabled and appropriate policies for user isolation.
+
+### OAuth Provider (Edge Functions)
+
+Endpoints provided:
+
+- Authorize: `/functions/v1/oauth-authorize`
+- Token: `/functions/v1/oauth-token`
+
+Register a client:
+
+```sql
+insert into supakey.oauth_clients (client_id, client_name, redirect_uri, app_identifier)
+values ('hasu-web', 'Hasu Web', 'http://localhost:3000', 'github.com/aksanoble/hasu')
+  on conflict (client_id) do update set redirect_uri = excluded.redirect_uri;
+```
+
+Authorize URL example:
+
+```
+${VITE_SUPABASE_URL}/functions/v1/oauth-authorize?client_id=hasu-web&redirect_uri=http://localhost:3000&response_type=code&state=xyz&code_challenge=...&code_challenge_method=S256&app_identifier=github.com/aksanoble/hasu
+```
+
+Token exchange:
+
+```
+POST ${VITE_SUPABASE_URL}/functions/v1/oauth-token
+{ grant_type: 'authorization_code', code, redirect_uri, client_id, code_verifier }
+```
