@@ -117,3 +117,4 @@ sqitch.conf
 *.temp
 
 claude.md
+.claude

@@ -9,6 +9,7 @@ const corsHeaders = {
 
 interface DeployMigrationsRequest {
   applicationName: string
+  appIdentifier: string  // URL like "github.com/aksanoble/hasu"
   migrations: {
     name: string
     sql: string
@@ -19,7 +20,26 @@ interface AuthResponse {
   jwt: string
   refreshToken: string
   username: string
+  userId: string
   applicationId: string
+  databaseUrl: string
+  anonKey: string
+}
+
+// Helper function to derive schema name from app identifier
+function deriveSchemaName(appIdentifier: string): string {
+  // Convert "github.com/aksanoble/hasu" to "github_com_aksanoble_hasu"
+  return appIdentifier
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_')
+    .replace(/^_+|_+$/g, '') // Remove leading/trailing underscores
+    .replace(/_+/g, '_') // Replace multiple underscores with single
+}
+
+// Helper function to derive username from app identifier
+function deriveUsername(appIdentifier: string): string {
+  // Convert "github.com/aksanoble/hasu" to "github_com_aksanoble_hasu_app"
+  return `${deriveSchemaName(appIdentifier)}_app`
 }
 
 // Helper function to create auth user
@@ -231,14 +251,14 @@ serve(async (req) => {
       }
     )
 
-    const { applicationName, migrations }: DeployMigrationsRequest = await req.json()
+    const { applicationName, appIdentifier, migrations }: DeployMigrationsRequest = await req.json()
 
-    console.log('Request body parsed:', { applicationName, migrationsCount: migrations?.length })
+    console.log('Request body parsed:', { applicationName, appIdentifier, migrationsCount: migrations?.length })
 
-    if (!applicationName || !migrations || !Array.isArray(migrations)) {
+    if (!applicationName || !appIdentifier || !migrations || !Array.isArray(migrations)) {
       console.log('Missing required fields')
       return new Response(
-        JSON.stringify({ error: 'Missing required fields: applicationName, migrations' }),
+        JSON.stringify({ error: 'Missing required fields: applicationName, appIdentifier, migrations' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -251,6 +271,7 @@ serve(async (req) => {
         id,
         postgres_url,
         supabase_url,
+        supabase_anon_key,
         supabase_secret_key,
         personal_access_token
       `)
@@ -274,12 +295,22 @@ serve(async (req) => {
       )
     }
 
-    // Check if application already exists, if not create it
+    // Derive consistent schema and username from app identifier
+    const schemaName = deriveSchemaName(appIdentifier)
+    const baseUsername = deriveUsername(appIdentifier)
+    
+    console.log('App identifier:', appIdentifier)
+    console.log('Derived schema name:', schemaName)
+    console.log('Derived username:', baseUsername)
+
+    // Check if application already exists based on app identifier, if not create it
     let { data: application, error: appError } = await userClient
       .from('applications')
       .select(`
         id,
         name,
+        app_identifier,
+        app_schema,
         user_connection_id,
         application_account_id,
         application_accounts (
@@ -287,7 +318,7 @@ serve(async (req) => {
           application_password
         )
       `)
-      .eq('name', applicationName)
+      .eq('app_identifier', appIdentifier)
       .eq('user_connection_id', userConnection.id)
       .single()
 
@@ -295,11 +326,11 @@ serve(async (req) => {
     
     // If application doesn't exist, create it along with test user credentials
     if (appError && appError.code === 'PGRST116') { // No rows returned
-      console.log('Application not found, creating new application:', applicationName)
+      console.log('Application not found, creating new application for identifier:', appIdentifier)
       isNewApplication = true
       
-      // Generate test user credentials
-      const username = `app_${applicationName.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${cryptoRandomString({length: 8, type: 'alphanumeric'})}`
+      // Use consistent username based on app identifier (no random suffix)
+      const username = baseUsername
       const password = cryptoRandomString({length: 16, type: 'alphanumeric'})
       
       // Create application account first (using service role to bypass RLS)
@@ -325,10 +356,12 @@ serve(async (req) => {
         .from('applications')
         .insert({
           name: applicationName,
+          app_identifier: appIdentifier,
+          app_schema: schemaName,
           user_connection_id: userConnection.id,
           application_account_id: newAccount.id
         })
-        .select('id, name, user_connection_id, application_account_id')
+        .select('id, name, app_identifier, app_schema, user_connection_id, application_account_id')
         .single()
         
       if (newAppError || !newApp) {
@@ -392,8 +425,8 @@ serve(async (req) => {
         throw new Error(`Database connection failed: ${connectionError.message}`)
       }
 
-      // Create dedicated schema for this application
-      const schemaName = `app_${applicationName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`
+      // Use the consistent schema name derived from app identifier
+      console.log(`Using schema name: ${schemaName} (derived from ${appIdentifier})`)
       
       if (isNewApplication) {
         console.log(`Creating dedicated schema for application: ${schemaName}`)
@@ -453,10 +486,7 @@ serve(async (req) => {
           })
           .eq('id', application.application_account_id)
         
-        await userClient
-          .from('applications')
-          .update({ app_schema: schemaName })
-          .eq('id', application.id)
+        // Schema name is already stored in the application record
         
         console.log(`Auth user created: ${userEmail}, Schema: ${schemaName}`)
         
@@ -643,7 +673,10 @@ serve(async (req) => {
       jwt: authData.session.access_token,
       refreshToken: authData.session.refresh_token,
       username: authUserEmail,
-      applicationId: application.id
+      userId: authData.session.user.id,
+      applicationId: application.id,
+      databaseUrl: userConnection.supabase_url,
+      anonKey: userConnection.supabase_anon_key
     }
 
     console.log('Authentication successful for application:', applicationName)

@@ -8,3 +8,5 @@ remove_name_from_user_connections 2025-08-20T18:11:16Z System Administrator <roo
 fix_application_accounts_rls 2025-08-24T08:47:00Z System Administrator <root@medha> # Fix RLS policies for application_accounts to allow edge function operations
 add_user_tokens_to_connections 2025-08-24T11:15:11Z System Administrator <root@medha> # Add personal access token and user service key to user_connections table
 cleanup_service_keys 2025-08-24T12:43:26Z System Administrator <root@medha> # Remove user_service_key and rename supabase_service_role to supabase_secret_key
+add_app_identifier_to_applications 2025-01-27T00:00:00Z System Administrator <root@medha> # Add app_identifier column to applications table
+add_supabase_anon_key_to_user_connections 2025-08-25T12:00:00Z System Administrator <root@medha> # Add supabase_anon_key column to user_connections table

@@ -5,6 +5,7 @@ export function Profile() {
 	const [form, setForm] = useState({
 		postgres_url: '',
 		supabase_url: '',
+		supabase_anon_key: '',
 		supabase_secret_key: '',
 		personal_access_token: '',
 	})
@@ -28,6 +29,7 @@ export function Profile() {
 				setForm({
 					postgres_url: data.postgres_url || '',
 					supabase_url: data.supabase_url || '',
+					supabase_anon_key: data.supabase_anon_key || '',
 					supabase_secret_key: data.supabase_secret_key || '',
 					personal_access_token: data.personal_access_token || '',
 				})
@@ -51,6 +53,7 @@ export function Profile() {
 			user_id: user.id,
 			postgres_url: form.postgres_url || null,
 			supabase_url: form.supabase_url || null,
+			supabase_anon_key: form.supabase_anon_key || null,
 			supabase_secret_key: form.supabase_secret_key || null,
 			personal_access_token: form.personal_access_token || null,
 		}
@@ -92,6 +95,20 @@ export function Profile() {
 									placeholder="https://xyzcompany.supabase.co"
 									className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
 								/>
+							</div>
+							<div>
+								<label htmlFor="supabase_anon_key" className="block text-sm font-medium text-gray-700">
+									Supabase Anon Key (user-level)
+								</label>
+								<input
+									id="supabase_anon_key"
+									type="password"
+									value={form.supabase_anon_key}
+									onChange={(e) => setForm({ ...form, supabase_anon_key: e.target.value })}
+									placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+									className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+								/>
+								<p className="mt-1 text-xs text-gray-500">The public anon key for your Supabase project</p>
 							</div>
 							<div>
 								<label htmlFor="supabase_secret_key" className="block text-sm font-medium text-gray-700">
