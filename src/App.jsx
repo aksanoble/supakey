@@ -1,9 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import './App.css'
-import { Dashboard } from './pages/Dashboard.jsx'
 import { Profile } from './pages/Profile.jsx'
-import { Applications } from './pages/Applications.jsx'
-import { AppDetail } from './pages/AppDetail.jsx'
 import { Landing } from './pages/Landing.jsx'
 import { OAuthAuthorize } from './pages/OAuthAuthorize.jsx'
 import { Nav } from './components/Nav.jsx'
@@ -18,11 +15,7 @@ function App() {
             <Route path="/login" element={<Landing />} />
             <Route path="/oauth/authorize" element={<OAuthAuthorize />} />
             <Route path="/" element={<ProtectedRoute />}>
-              <Route index element={<Dashboard />} />
-              <Route path="dashboard" element={<Dashboard />} />
-              <Route path="profile" element={<Profile />} />
-              <Route path="applications" element={<Applications />} />
-              <Route path="applications/:appId" element={<AppDetail />} />
+              <Route index element={<Profile />} />
             </Route>
           </Routes>
         </BrowserRouter>

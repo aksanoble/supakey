@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
+import { supabase } from '../lib/supabaseClient'
 
 export function Landing() {
 	const [form, setForm] = useState({
@@ -10,23 +11,63 @@ export function Landing() {
 	const [message, setMessage] = useState('')
 	const [loading, setLoading] = useState(false)
 	const navigate = useNavigate()
+	const [searchParams] = useSearchParams()
 	const { user, signIn } = useAuth()
+	
+	// Get redirect parameters for Hasu integration
+	const returnUrl = searchParams.get('return_url')
+	const appIdentifier = searchParams.get('app_identifier')
 
 	// Redirect if already authenticated
 	useEffect(() => {
 		if (user) {
-			// Check if there are stored OAuth parameters
-			const storedOAuthParams = sessionStorage.getItem('oauth_params')
-			if (storedOAuthParams) {
-				// Clear the stored params and redirect to OAuth authorize
-				sessionStorage.removeItem('oauth_params')
-				const params = new URLSearchParams(JSON.parse(storedOAuthParams))
-				navigate(`/oauth/authorize?${params.toString()}`)
-			} else {
-				navigate('/')
+			handleUserRedirect()
+		}
+	}, [user, navigate, returnUrl, appIdentifier])
+	
+	const handleUserRedirect = async () => {
+		// If this is a Hasu integration request, redirect back to Hasu with tokens
+		if (returnUrl && appIdentifier) {
+			try {
+				// Get the current session to extract tokens
+				const { data: sessionData } = await supabase.auth.getSession()
+				
+				if (sessionData.session) {
+					const redirectUrl = new URL(returnUrl)
+					redirectUrl.searchParams.set('access_token', sessionData.session.access_token)
+					redirectUrl.searchParams.set('refresh_token', sessionData.session.refresh_token)
+					
+					// Redirect back to Hasu
+					window.location.href = redirectUrl.toString()
+					return
+				}
+			} catch (error) {
+				console.error('Error getting session for redirect:', error)
+				setMessage('Error retrieving session for redirect')
 			}
 		}
-	}, [user, navigate])
+		
+		// If OAuth authorize params are present in URL and user is logged in, forward to authorize
+		const oauthClientId = searchParams.get('client_id')
+		const oauthRedirectUri = searchParams.get('redirect_uri')
+		const oauthResponseType = searchParams.get('response_type')
+		if (oauthClientId && oauthRedirectUri && oauthResponseType === 'code') {
+			const qs = searchParams.toString()
+			navigate(`/oauth/authorize?${qs}`)
+			return
+		}
+
+		// Check if there are stored OAuth parameters (legacy flow)
+		const storedOAuthParams = sessionStorage.getItem('oauth_params')
+		if (storedOAuthParams) {
+			// Clear the stored params and redirect to OAuth authorize
+			sessionStorage.removeItem('oauth_params')
+			const params = new URLSearchParams(JSON.parse(storedOAuthParams))
+			navigate(`/oauth/authorize?${params.toString()}`)
+		} else {
+			navigate('/')
+		}
+	}
 
 	async function onSubmit(e) {
 		e.preventDefault()
@@ -37,11 +78,41 @@ export function Landing() {
 		
 		if (error) {
 			setMessage(`Error: ${error.message}`)
+			setLoading(false)
 		} else if (data.user) {
 			setMessage('Sign in successful! Redirecting...')
-			// Redirect will be handled by the useEffect above after user state updates
+			// For Hasu integration, handle redirect immediately
+			if (returnUrl && appIdentifier && data.session) {
+				try {
+					const redirectUrl = new URL(returnUrl)
+					redirectUrl.searchParams.set('access_token', data.session.access_token)
+					redirectUrl.searchParams.set('refresh_token', data.session.refresh_token)
+					
+					// Small delay to show success message
+					setTimeout(() => {
+						window.location.href = redirectUrl.toString()
+					}, 1000)
+					return
+				} catch (error) {
+					console.error('Error building redirect URL:', error)
+					setMessage('Error: Invalid redirect URL')
+					setLoading(false)
+					return
+				}
+			}
+			// If OAuth authorize params exist, forward to /oauth/authorize after login
+			const oauthClientId = searchParams.get('client_id')
+			const oauthRedirectUri = searchParams.get('redirect_uri')
+			const oauthResponseType = searchParams.get('response_type')
+			if (oauthClientId && oauthRedirectUri && oauthResponseType === 'code') {
+				const qs = searchParams.toString()
+				navigate(`/oauth/authorize?${qs}`)
+				return
+			}
+			// Regular flow - redirect will be handled by the useEffect above after user state updates
 		} else {
 			setMessage('Error: No user data returned from authentication')
+			setLoading(false)
 		}
 		
 		setLoading(false)
@@ -102,10 +173,13 @@ export function Landing() {
 						</div>
 					</div>
 					<h2 className="text-center text-3xl font-extrabold text-gray-900">
-						Sign in to your account
+						{returnUrl && appIdentifier ? 'Authorize App Access' : 'Sign in to your account'}
 					</h2>
 					<p className="mt-2 text-center text-sm text-gray-600">
-						Welcome back to Supakey
+						{returnUrl && appIdentifier 
+							? `${appIdentifier} would like to access your Supakey account`
+							: 'Welcome back to Supakey'
+						}
 					</p>
 				</div>
 
@@ -165,7 +239,7 @@ export function Landing() {
 											Signing in...
 										</div>
 									) : (
-										'Sign in'
+										returnUrl && appIdentifier ? 'Sign in & Authorize' : 'Sign in'
 									)}
 								</button>
 							</div>

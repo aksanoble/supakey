@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 
 export function Profile() {
+	const location = useLocation()
 	const [form, setForm] = useState({
 		postgres_url: '',
 		supabase_url: '',
@@ -10,20 +12,21 @@ export function Profile() {
 		personal_access_token: '',
 	})
 	const [loading, setLoading] = useState(false)
-	const [message, setMessage] = useState('')
+	const [message, setMessage] = useState(location.state?.message || '')
 
 	useEffect(() => {
 		let isMounted = true
 		async function load() {
 			const { data: { user } } = await supabase.auth.getUser()
 			if (!user) return
-			const { data, error } = await supabase
+			const { data: dataArray, error } = await supabase
 				.from('user_connections')
 				.select('*')
 				.eq('user_id', user.id)
-				.single()
+			
+			const data = dataArray?.[0] || null
 			if (!isMounted) return
-			if (error && error.code !== 'PGRST116') {
+			if (error) {
 				setMessage(error.message)
 			} else if (data) {
 				setForm({
@@ -43,24 +46,54 @@ export function Profile() {
 		e.preventDefault()
 		setLoading(true)
 		setMessage('')
+		
+		// Validate all required fields
+		const requiredFields = [
+			{ field: 'supabase_url', name: 'Supabase URL' },
+			{ field: 'supabase_anon_key', name: 'Supabase Anon Key' },
+			{ field: 'supabase_secret_key', name: 'Supabase Secret Key' },
+			{ field: 'personal_access_token', name: 'Personal Access Token' }
+		]
+		
+		for (const { field, name } of requiredFields) {
+			if (!form[field] || !form[field].trim()) {
+				setMessage(`${name} is required`)
+				setLoading(false)
+				return
+			}
+		}
+		
 		const { data: { user } } = await supabase.auth.getUser()
 		if (!user) {
 			setMessage('Not signed in')
 			setLoading(false)
 			return
 		}
+		
 		const upsertPayload = {
 			user_id: user.id,
 			postgres_url: form.postgres_url || null,
-			supabase_url: form.supabase_url || null,
-			supabase_anon_key: form.supabase_anon_key || null,
-			supabase_secret_key: form.supabase_secret_key || null,
-			personal_access_token: form.personal_access_token || null,
+			supabase_url: form.supabase_url,
+			supabase_anon_key: form.supabase_anon_key,
+			supabase_secret_key: form.supabase_secret_key,
+			personal_access_token: form.personal_access_token,
 		}
+		
 		const { error } = await supabase.from('user_connections').upsert(upsertPayload, { onConflict: 'user_id' })
 		setLoading(false)
 		if (error) setMessage(error.message)
-		else setMessage('Settings saved successfully')
+		else {
+			setMessage('Settings saved successfully')
+			// Check if we need to redirect back to OAuth flow
+			const oauthParams = sessionStorage.getItem('oauth_params')
+			if (oauthParams) {
+				sessionStorage.removeItem('oauth_params')
+				// Redirect back to OAuth authorize with stored parameters
+				const params = JSON.parse(oauthParams)
+				const searchParams = new URLSearchParams(params)
+				window.location.href = `/oauth/authorize?${searchParams.toString()}`
+			}
+		}
 	}
 
 	return (
@@ -85,7 +118,7 @@ export function Profile() {
 							</div>
 							<div>
 								<label htmlFor="supabase_url" className="block text-sm font-medium text-gray-700">
-									Supabase URL (user-level)
+									Supabase URL (user-level) <span className="text-red-500">*</span>
 								</label>
 								<input
 									id="supabase_url"
@@ -98,7 +131,7 @@ export function Profile() {
 							</div>
 							<div>
 								<label htmlFor="supabase_anon_key" className="block text-sm font-medium text-gray-700">
-									Supabase Anon Key (user-level)
+									Supabase Anon Key (user-level) <span className="text-red-500">*</span>
 								</label>
 								<input
 									id="supabase_anon_key"
@@ -112,7 +145,7 @@ export function Profile() {
 							</div>
 							<div>
 								<label htmlFor="supabase_secret_key" className="block text-sm font-medium text-gray-700">
-									Supabase Secret Key (user-level)
+									Supabase Secret Key (user-level) <span className="text-red-500">*</span>
 								</label>
 								<input
 									id="supabase_secret_key"
@@ -125,7 +158,7 @@ export function Profile() {
 							</div>
 							<div>
 								<label htmlFor="personal_access_token" className="block text-sm font-medium text-gray-700">
-									Personal Access Token (for Platform API)
+									Personal Access Token (for Platform API) <span className="text-red-500">*</span>
 								</label>
 								<input
 									id="personal_access_token"

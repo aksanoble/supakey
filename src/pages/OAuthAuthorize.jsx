@@ -54,6 +54,42 @@ export function OAuthAuthorize() {
 
   const checkClientAndConsent = async () => {
     try {
+      // Check if user has complete connection details first
+      const { data: connectionDataArray } = await supabase
+        .from('user_connections')
+        .select('supabase_url, supabase_anon_key, supabase_secret_key, personal_access_token')
+        .eq('user_id', user.id)
+      
+      const connectionData = connectionDataArray?.[0] || null
+      
+      // Check if all required fields are present and not empty
+      const hasCompleteConnection = connectionData && 
+        connectionData.supabase_url && 
+        connectionData.supabase_anon_key && 
+        connectionData.supabase_secret_key && 
+        connectionData.personal_access_token
+      
+      if (!hasCompleteConnection) {
+        // Store OAuth parameters and redirect to profile setup
+        sessionStorage.setItem('oauth_params', JSON.stringify({
+          client_id: clientId,
+          redirect_uri: redirectUri,
+          response_type: responseType,
+          state,
+          scope,
+          code_challenge: codeChallenge,
+          code_challenge_method: codeChallengeMethod,
+          app_identifier: appIdentifier
+        }))
+        
+        navigate('/', { 
+          state: { 
+            message: 'Please complete your connection settings before authorizing applications.' 
+          }
+        })
+        return
+      }
+      
       // First, register the client if it doesn't exist and get client info
       await registerClientIfNeeded()
       
@@ -91,23 +127,33 @@ export function OAuthAuthorize() {
 
   const handleAuthorize = async () => {
     if (authorizing) return
-    
+
     setAuthorizing(true)
     setError('')
 
     try {
+      console.log('Starting OAuth authorization with:', {
+        clientId,
+        redirectUri,
+        appIdentifier,
+        codeChallenge: codeChallenge?.substring(0, 20) + '...',
+        codeChallengeMethod
+      })
+
       // Save consent if this is a new consent
       if (showConsent) {
+        console.log('Saving consent for user:', user.id)
         await supabase.from('oauth_consents').insert({
           user_id: user.id,
           client_id: clientId,
           scope: scope || 'default'
         })
       }
-      
+
       // Generate authorization code
       const authCode = generateAuthCode()
-      
+      console.log('Generated auth code:', authCode?.substring(0, 10) + '...')
+
       // Store authorization details for later token exchange
       const authData = {
         code: authCode,
@@ -121,14 +167,31 @@ export function OAuthAuthorize() {
         expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString() // 10 minutes
       }
 
+      console.log('Storing authorization data:', {
+        ...authData,
+        code: authData.code?.substring(0, 10) + '...'
+      })
+
       // Store in database for token exchange
       const { error: insertError } = await supabase
         .from('oauth_authorization_codes')
         .insert([authData])
 
       if (insertError) {
+        console.error('Database insert error:', insertError)
         throw new Error(`Failed to store authorization code: ${insertError.message}`)
       }
+
+      console.log('Successfully stored authorization code')
+
+      // Verify the code was stored by querying it back
+      const { data: verifyCode } = await supabase
+        .from('oauth_authorization_codes')
+        .select('code, expires_at, client_id, redirect_uri')
+        .eq('code', authCode)
+        .single()
+
+      console.log('Verification - code stored:', verifyCode)
 
       // Redirect back to client with authorization code
       const redirectUrl = new URL(redirectUri)
@@ -137,7 +200,10 @@ export function OAuthAuthorize() {
         redirectUrl.searchParams.set('state', state)
       }
 
-      window.location.href = redirectUrl.toString()
+      const finalRedirectUrl = redirectUrl.toString()
+      console.log('Redirecting to:', finalRedirectUrl)
+
+      window.location.href = finalRedirectUrl
     } catch (err) {
       console.error('OAuth authorization error:', err)
       setError(err.message)
@@ -171,6 +237,7 @@ export function OAuthAuthorize() {
       throw new Error(`Failed to register client: ${insertError.message}`)
     }
   }
+  
 
   const generateAuthCode = () => {
     const array = new Uint8Array(32)
@@ -180,7 +247,7 @@ export function OAuthAuthorize() {
 
   const handleLogin = () => {
     // Store OAuth parameters in session storage to resume after login
-    sessionStorage.setItem('oauth_params', JSON.stringify({
+    const paramsObj = {
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: responseType,
@@ -189,9 +256,11 @@ export function OAuthAuthorize() {
       code_challenge: codeChallenge,
       code_challenge_method: codeChallengeMethod,
       app_identifier: appIdentifier
-    }))
-    
-    navigate('/login')
+    }
+    sessionStorage.setItem('oauth_params', JSON.stringify(paramsObj))
+    // Also forward params via URL so redirect works even if sessionStorage is blocked
+    const qs = new URLSearchParams(paramsObj).toString()
+    navigate(`/login?${qs}`)
   }
 
   if (loading) {
