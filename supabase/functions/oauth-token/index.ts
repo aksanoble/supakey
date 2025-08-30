@@ -13,6 +13,60 @@ function json(body: any, status = 200) {
   })
 }
 
+// Helpers to align with deploy-migrations edge function
+function deriveSchemaName(appIdentifier: string): string {
+  return appIdentifier
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_')
+}
+
+function deriveSquitchRegistrySchema(appIdentifier: string): string {
+  return `sqitch_${deriveSchemaName(appIdentifier)}`
+}
+
+async function updatePostgRESTConfig(platformApiToken: string, supabaseUrl: string, newSchema: string): Promise<void> {
+  const urlPattern = /https:\/\/([a-zA-Z0-9]+)\.supabase\.co/
+  const match = supabaseUrl.match(urlPattern)
+  if (!match) throw new Error('Invalid Supabase URL format')
+  const projectId = match[1]
+
+  const getResponse = await fetch(`https://api.supabase.com/v1/projects/${projectId}/postgrest`, {
+    method: 'GET',
+    headers: {
+      'authorization': `Bearer ${platformApiToken}`,
+      'accept': 'application/json',
+      'content-type': 'application/json'
+    }
+  })
+  if (!getResponse.ok) {
+    const errorText = await getResponse.text()
+    throw new Error(`Failed to get PostgREST config: ${getResponse.status} - ${errorText}`)
+  }
+  const currentConfig = await getResponse.json()
+  const currentSchemas: string[] = currentConfig.db_schema ? currentConfig.db_schema.split(',').map((s: string) => s.trim()) : ['public']
+  if (!currentSchemas.includes(newSchema)) currentSchemas.push(newSchema)
+  const updatePayload = {
+    db_schema: currentSchemas.join(', '),
+    max_rows: currentConfig.max_rows || 1000,
+    db_extra_search_path: currentConfig.db_extra_search_path || 'public, extensions'
+  }
+  const updateResponse = await fetch(`https://api.supabase.com/v1/projects/${projectId}/postgrest`, {
+    method: 'PATCH',
+    headers: {
+      'authorization': `Bearer ${platformApiToken}`,
+      'accept': 'application/json',
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify(updatePayload)
+  })
+  if (!updateResponse.ok) {
+    const errorText = await updateResponse.text()
+    throw new Error(`Failed to update PostgREST config: ${updateResponse.status} - ${errorText}`)
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   try {
@@ -172,7 +226,7 @@ serve(async (req) => {
 
     const { data: userConnection } = await supabase
       .from('user_connections')
-      .select('supabase_url, supabase_secret_key, supabase_anon_key')
+      .select('supabase_url, supabase_secret_key, supabase_anon_key, personal_access_token, postgres_url')
       .eq('id', application.user_connection_id)
       .single()
 
@@ -199,6 +253,8 @@ serve(async (req) => {
     if (signInError || !signInData.session) {
       return json({ error: 'server_error', message: 'failed to mint tokens' }, 500)
     }
+
+    // Do not deploy migrations here. The client will call the dedicated deploy-migrations function post-OAuth.
 
     // One-time use: delete code
     await supabase.from('oauth_authorization_codes').delete().eq('code', code)

@@ -10,10 +10,16 @@ const corsHeaders = {
 interface DeployMigrationsRequest {
   applicationName: string
   appIdentifier: string  // URL like "github.com/aksanoble/hasu"
-  migrations: {
+  migrations?: {
     name: string
     sql: string
   }[]
+  migrationsBaseUrl?: string
+  migrationsDir?: {
+    plan: string
+    deploy: { name: string, sql: string }[]
+  }
+  applicationId?: string
 }
 
 interface AuthResponse {
@@ -36,16 +42,24 @@ function deriveSchemaName(appIdentifier: string): string {
     .replace(/_+/g, '_') // Replace multiple underscores with single
 }
 
+// Helper function to derive Sqitch registry schema name from app identifier
+function deriveSquitchRegistrySchema(appIdentifier: string): string {
+  // Convert "github.com/aksanoble/hasu" to "sqitch_github_com_aksanoble_hasu"
+  const baseSchema = deriveSchemaName(appIdentifier)
+  return `sqitch_${baseSchema}`
+}
+
 // Helper function to derive username from app identifier
 function deriveUsername(appIdentifier: string): string {
   // Convert "github.com/aksanoble/hasu" to "github_com_aksanoble_hasu_app"
   return `${deriveSchemaName(appIdentifier)}_app`
 }
 
-// Helper function to create auth user
-async function createAuthUser(targetAdminClient: any, userEmail: string, userPassword: string, applicationName: string, schemaName: string) {
-  console.log('Creating Supabase auth user via admin API')
+// Helper function to create or update auth user
+async function createOrUpdateAuthUser(targetAdminClient: any, userEmail: string, userPassword: string, applicationName: string, schemaName: string) {
+  console.log('Creating or updating Supabase auth user via admin API')
   
+  // First try to create the user
   const { data: newUser, error: createUserError } = await targetAdminClient.auth.admin.createUser({
     email: userEmail,
     password: userPassword,
@@ -61,7 +75,49 @@ async function createAuthUser(targetAdminClient: any, userEmail: string, userPas
   })
   
   if (createUserError) {
-    throw new Error(`Failed to create auth user: ${createUserError.message}`)
+    // If user already exists, try to update their password
+    if (createUserError.message.includes('already been registered') || createUserError.message.includes('already exists')) {
+      console.log('User already exists, attempting to update password and metadata')
+      
+      try {
+        // Get existing user by email
+        const { data: existingUsers, error: listError } = await targetAdminClient.auth.admin.listUsers()
+        
+        if (listError) {
+          throw new Error(`Failed to list users: ${listError.message}`)
+        }
+        
+        const existingUser = existingUsers.users.find((u: any) => u.email === userEmail)
+        
+        if (existingUser) {
+          // Update the existing user's password and metadata
+          const { data: updatedUser, error: updateError } = await targetAdminClient.auth.admin.updateUserById(
+            existingUser.id,
+            {
+              password: userPassword,
+              user_metadata: {
+                application: applicationName,
+                schema: schemaName
+              }
+            }
+          )
+          
+          if (updateError) {
+            throw new Error(`Failed to update existing user: ${updateError.message}`)
+          }
+          
+          console.log(`Auth user updated via admin API: ${userEmail}, ID: ${updatedUser.user.id}`)
+          return updatedUser.user.id
+        } else {
+          throw new Error(`User with email ${userEmail} not found`)
+        }
+      } catch (updateError) {
+        console.error('Failed to update existing user:', updateError.message)
+        throw new Error(`Failed to handle existing user: ${updateError.message}`)
+      }
+    } else {
+      throw new Error(`Failed to create auth user: ${createUserError.message}`)
+    }
   }
   
   console.log(`Auth user created via admin API: ${userEmail}, ID: ${newUser.user.id}`)
@@ -200,15 +256,8 @@ serve(async (req) => {
   try {
     console.log('Edge function called')
     
-    // Get the authorization header
+    // Get the authorization header (optional: we support fallback via applicationId)
     const authHeader = req.headers.get('authorization')
-    if (!authHeader) {
-      console.log('Missing authorization header')
-      return new Response(
-        JSON.stringify({ error: 'Missing authorization header' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
 
     // Initialize Supabase client
     const supabaseClient = createClient(
@@ -222,66 +271,85 @@ serve(async (req) => {
 
     console.log('Supabase client initialized')
 
-    // Get user from JWT token
-    const jwtToken = authHeader.replace('Bearer ', '')
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser(jwtToken)
-    
-    if (authError || !user) {
-      console.log('Auth error:', authError)
-      return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    // Try to resolve Supakey user if auth header provided
+    let supakeyUser: any | null = null
+    if (authHeader) {
+      const jwtToken = authHeader.replace('Bearer ', '')
+      const { data: { user }, error: authError } = await supabaseClient.auth.getUser(jwtToken)
+      if (!authError && user) {
+        supakeyUser = user
+        console.log('User authenticated:', user.email)
+      } else {
+        console.log('Supakey auth not available; will try applicationId fallback if provided')
+      }
     }
 
-    console.log('User authenticated:', user.email)
-
-    // Create a new client with the user's session for RLS context
+    // Create a client; include RLS header only if we have Supakey user
     const userClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
       { 
         auth: { persistSession: false },
         db: { schema: 'supakey' },
-        global: {
-          headers: {
-            Authorization: authHeader
-          }
-        }
+        global: supakeyUser && authHeader ? { headers: { Authorization: authHeader } } : undefined
       }
     )
 
-    const { applicationName, appIdentifier, migrations }: DeployMigrationsRequest = await req.json()
+    const { applicationName, appIdentifier, migrations, migrationsBaseUrl, migrationsDir, applicationId }: DeployMigrationsRequest = await req.json()
 
     console.log('Request body parsed:', { applicationName, appIdentifier, migrationsCount: migrations?.length })
 
-    if (!applicationName || !appIdentifier || !migrations || !Array.isArray(migrations)) {
+    if (!applicationName || !appIdentifier || (!migrationsBaseUrl && (!migrationsDir || !migrationsDir.plan) && (!migrations || !Array.isArray(migrations)))) {
       console.log('Missing required fields')
       return new Response(
-        JSON.stringify({ error: 'Missing required fields: applicationName, appIdentifier, migrations' }),
+        JSON.stringify({ error: 'Missing required fields: applicationName, appIdentifier, migrationsDir.plan or migrationsBaseUrl or migrations[]' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // Get the user's connection
-    console.log('Looking up user connection for user:', user.id)
-    const { data: userConnection, error: connError } = await userClient
-      .from('user_connections')
-      .select(`
-        id,
-        postgres_url,
-        supabase_url,
-        supabase_anon_key,
-        supabase_secret_key,
-        personal_access_token
-      `)
-      .eq('user_id', user.id)
-      .single()
+    // Get the user's connection via Supakey user (RLS) or fallback by applicationId (service role)
+    let userConnection: any = null
+    let connError: any = null
+    if (supakeyUser) {
+      console.log('Looking up user connection for user:', supakeyUser.id)
+      const res = await userClient
+        .from('user_connections')
+        .select(`
+          id,
+          postgres_url,
+          supabase_url,
+          supabase_anon_key,
+          supabase_secret_key,
+          personal_access_token
+        `)
+        .eq('user_id', supakeyUser.id)
+        .single()
+      userConnection = res.data
+      connError = res.error
+    } else if (applicationId) {
+      console.log('Falling back to applicationId lookup for user connection:', applicationId)
+      const appRes = await supabaseClient
+        .from('applications')
+        .select('user_connection_id')
+        .eq('id', applicationId)
+        .single()
+      if (!appRes.error && appRes.data?.user_connection_id) {
+        const connRes = await supabaseClient
+          .from('user_connections')
+          .select('id, postgres_url, supabase_url, supabase_anon_key, supabase_secret_key, personal_access_token')
+          .eq('id', appRes.data.user_connection_id)
+          .single()
+        userConnection = connRes.data
+        connError = connRes.error
+      } else {
+        connError = appRes.error || new Error('Application not found')
+      }
+    }
 
     if (connError || !userConnection) {
       console.log('User connection error:', connError)
       return new Response(
-        JSON.stringify({ error: 'No database connection found for user' }),
+        JSON.stringify({ error: 'No database connection found for user/application' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -304,7 +372,25 @@ serve(async (req) => {
     console.log('Derived username:', baseUsername)
 
     // Check if application already exists based on app identifier, if not create it
-    let { data: application, error: appError } = await userClient
+    let { data: application, error: appError } = supakeyUser
+      ? await userClient
+      .from('applications')
+      .select(`
+        id,
+        name,
+        app_identifier,
+        app_schema,
+        user_connection_id,
+        application_account_id,
+        application_accounts (
+          application_username,
+          application_password
+        )
+      `)
+      .eq('app_identifier', appIdentifier)
+      .eq('user_connection_id', userConnection.id)
+      .single()
+      : await supabaseClient
       .from('applications')
       .select(`
         id,
@@ -352,7 +438,7 @@ serve(async (req) => {
       }
       
       // Create application
-      const { data: newApp, error: newAppError } = await userClient
+      const { data: newApp, error: newAppError } = supakeyUser ? await userClient : await supabaseClient
         .from('applications')
         .insert({
           name: applicationName,
@@ -429,10 +515,7 @@ serve(async (req) => {
       console.log(`Using schema name: ${schemaName} (derived from ${appIdentifier})`)
       
       if (isNewApplication) {
-        console.log(`Creating dedicated schema for application: ${schemaName}`)
-        
-        // Create application-specific schema
-        await client.queryObject(`CREATE SCHEMA IF NOT EXISTS ${schemaName};`)
+        console.log(`Setting up new application: ${schemaName}`)
         
         // Create Supabase admin client for target database to create auth user properly
         const targetAdminClient = createClient(
@@ -443,33 +526,7 @@ serve(async (req) => {
         // Create auth user
         const userEmail = `${username}@app.local`
         const userPassword = password
-        const authUserId = await createAuthUser(targetAdminClient, userEmail, userPassword, applicationName, schemaName)
-        
-        // Configure schema for Supabase API access
-        try {
-          // Grant schema access to the authenticator role (used by PostgREST)
-          await client.queryObject(`GRANT USAGE ON SCHEMA ${schemaName} TO authenticator;`)
-          
-          // Grant schema access to authenticated role (for RLS)
-          await client.queryObject(`GRANT USAGE ON SCHEMA ${schemaName} TO authenticated;`)
-          
-          // Grant table permissions to authenticated role
-          await client.queryObject(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ${schemaName} TO authenticated;`)
-          
-          // Set default privileges for future tables in this schema
-          await client.queryObject(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaName} GRANT ALL ON TABLES TO authenticated;`)
-          await client.queryObject(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaName} GRANT ALL ON TABLES TO authenticator;`)
-          
-          console.log(`Schema ${schemaName} configured for Supabase API access`)
-        
-          // Update PostgREST configuration and apply grants
-          await updatePostgRESTConfigWithRetry(userConnection.personal_access_token, userConnection.supabase_url, schemaName)
-          await applySchemaGrants(client, schemaName)
-        
-      } catch (schemaError) {
-        console.error('Schema configuration error:', schemaError.message)
-        throw schemaError  // Re-throw to fail the operation if schema setup fails
-      }
+        const authUserId = await createOrUpdateAuthUser(targetAdminClient, userEmail, userPassword, applicationName, schemaName)
         
         // Update the application records in memory
         application.application_accounts = {
@@ -523,12 +580,12 @@ serve(async (req) => {
           if (signInError || !signInData.session) {
             console.log('Auth user sign in failed, may need recreation. Error:', signInError?.message)
             
-            // Try to recreate user using admin API
+            // Try to recreate/update user using admin API
             try {
-              await createAuthUser(targetAdminClient, authUserEmail, storedPassword, applicationName, schemaName)
-              console.log('Auth user recreated successfully')
+              await createOrUpdateAuthUser(targetAdminClient, authUserEmail, storedPassword, applicationName, schemaName)
+              console.log('Auth user recreated/updated successfully')
             } catch (recreateError) {
-              console.log('Failed to recreate auth user:', recreateError.message)
+              console.log('Failed to recreate/update auth user:', recreateError.message)
               throw recreateError
             }
           } else {
@@ -540,39 +597,113 @@ serve(async (req) => {
         }
       }
       
-      // Check if migrations need to be run
-      const { data: existingMigrations } = await userClient
-        .from('application_migrations')
-        .select('name')
-        .eq('application_id', application.id)
+      // Use app-specific Sqitch schema for tracking migrations
+      const squitchSchema = deriveSquitchRegistrySchema(appIdentifier)
       
-      const existingMigrationNames = new Set(existingMigrations?.map((m: any) => m.name) || [])
-      const migrationsToRun = migrations.filter(m => !existingMigrationNames.has(m.name))
+      // Check if migrations need to be run by querying the app-specific Sqitch schema
+      let existingMigrationNames = new Set()
+      try {
+        const existingMigrationsResult = await client.queryObject(`
+          SELECT change FROM ${squitchSchema}.changes 
+          WHERE project = $1
+        `, [applicationName])
+        
+        existingMigrationNames = new Set(existingMigrationsResult.rows.map((row: any) => row.change))
+      } catch (error) {
+        // If Sqitch schema doesn't exist yet, no migrations have been run
+        console.log(`Sqitch schema ${squitchSchema} doesn't exist yet, will create it`)
+      }
+      
+      // Build migration list from provided array or fetch from base URL
+      let effectiveMigrations = migrations || []
+      // Prefer full directory payload if provided to ensure plan order
+      if ((!effectiveMigrations || effectiveMigrations.length === 0) && migrationsDir && migrationsDir.deploy?.length) {
+        console.log('Using migrationsDir payload (deploy list)')
+        effectiveMigrations = migrationsDir.deploy
+      }
+      if ((!effectiveMigrations || effectiveMigrations.length === 0) && migrationsBaseUrl) {
+        console.log('Fetching sqitch.plan from:', migrationsBaseUrl)
+        let planResp = await fetch(`${migrationsBaseUrl}/sqitch.plan`)
+        if (!planResp.ok && migrationsBaseUrl.includes('raw.githubusercontent.com')) {
+          const cdn = migrationsBaseUrl.replace('https://raw.githubusercontent.com/', 'https://cdn.jsdelivr.net/gh/').replace('/main/', '@main/')
+          console.log('Raw URL failed, trying CDN:', cdn)
+          planResp = await fetch(`${cdn}/sqitch.plan`)
+        }
+        if (!planResp.ok) {
+          throw new Error(`Failed to fetch sqitch.plan: ${planResp.status}`)
+        }
+        const planText = await planResp.text()
+        const names = planText
+          .split('\n')
+          .map(l => l.trim())
+          .filter(l => l && !l.startsWith('%') && !l.startsWith('#'))
+          .map(l => l.split(' ')[0])
+        const loaded: { name: string, sql: string }[] = []
+        for (const name of names) {
+          try {
+            let resp = await fetch(`${migrationsBaseUrl}/deploy/${name}.sql`)
+            if (!resp.ok && migrationsBaseUrl.includes('raw.githubusercontent.com')) {
+              const cdn = migrationsBaseUrl.replace('https://raw.githubusercontent.com/', 'https://cdn.jsdelivr.net/gh/').replace('/main/', '@main/')
+              resp = await fetch(`${cdn}/deploy/${name}.sql`)
+            }
+            if (resp.ok) {
+              loaded.push({ name, sql: (await resp.text()).trim() })
+            } else {
+              console.warn('Missing deploy file for migration:', name)
+            }
+          } catch (e) {
+            console.warn('Error fetching migration file:', name, e?.message)
+          }
+        }
+        effectiveMigrations = loaded
+        console.log('Loaded migrations from URL:', effectiveMigrations.map(m => m.name))
+      }
+
+      const migrationsToRun = effectiveMigrations.filter(m => !existingMigrationNames.has(m.name))
       
       if (migrationsToRun.length > 0) {
         console.log(`Running ${migrationsToRun.length} new migrations`)
         
-        // Create sqitch schema and migrations tracking table
-        await client.queryObject(`CREATE SCHEMA IF NOT EXISTS sqitch;`)
+        // Ensure the application schema exists before running migrations
+        console.log(`Ensuring dedicated schema exists: ${schemaName}`)
+        await client.queryObject(`CREATE SCHEMA IF NOT EXISTS ${schemaName};`)
         
-        await client.queryObject(`
-          CREATE TABLE IF NOT EXISTS sqitch.changes (
-            change_id TEXT PRIMARY KEY,
-            script_hash TEXT,
-            change TEXT NOT NULL,
-            project TEXT NOT NULL DEFAULT 'supakey',
-            note TEXT DEFAULT '',
-            committed_at TIMESTAMPTZ DEFAULT NOW(),
-            committer_name TEXT DEFAULT 'supakey',
-            committer_email TEXT DEFAULT 'admin@supakey.app',
-            planned_at TIMESTAMPTZ DEFAULT NOW(),
-            planner_name TEXT DEFAULT 'supakey',
-            planner_email TEXT DEFAULT 'admin@supakey.app'
-          );
-        `)
+        // Configure schema for Supabase API access
+        try {
+          // Grant schema access to the authenticator role (used by PostgREST)
+          await client.queryObject(`GRANT USAGE ON SCHEMA ${schemaName} TO authenticator;`)
+          
+          // Grant schema access to authenticated role (for RLS)
+          await client.queryObject(`GRANT USAGE ON SCHEMA ${schemaName} TO authenticated;`)
+          
+          // Grant table permissions to authenticated role
+          await client.queryObject(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ${schemaName} TO authenticated;`)
+          
+          // Set default privileges for future tables in this schema
+          await client.queryObject(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaName} GRANT ALL ON TABLES TO authenticated;`)
+          await client.queryObject(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaName} GRANT ALL ON TABLES TO authenticator;`)
+          
+          console.log(`Schema ${schemaName} configured for Supabase API access`)
+        
+          // Update PostgREST configuration and apply grants
+          await updatePostgRESTConfigWithRetry(userConnection.personal_access_token, userConnection.supabase_url, schemaName)
+          await applySchemaGrants(client, schemaName)
+        
+        } catch (schemaError) {
+          console.error('Schema configuration error:', schemaError.message)
+          throw schemaError  // Re-throw to fail the operation if schema setup fails
+        }
+        
+        // Sqitch will create its own schema and tables automatically when migrations run
+        // We don't need to manually create the Sqitch tracking tables
 
         // Set search path to application schema for migrations
         await client.queryObject(`SET search_path TO ${schemaName}, public;`)
+        
+        // Set current user ID for migrations that need it if available
+        if (supakeyUser?.id) {
+          await client.queryObject(`SELECT set_config('app.current_user_id', '${supakeyUser.id}', false);`)
+        }
         
         // Deploy each new migration to the application schema
         for (const migration of migrationsToRun) {
@@ -606,21 +737,25 @@ serve(async (req) => {
             // Apply grants after each migration to ensure new objects are accessible
             await applySchemaGrants(client, schemaName)
 
-            // Record the migration as deployed in sqitch
+            // Ensure app-specific Sqitch registry exists and record the migration
+            const squitchSchema = deriveSquitchRegistrySchema(appIdentifier)
+            await client.queryObject(`CREATE SCHEMA IF NOT EXISTS ${squitchSchema};`)
+            await client.queryObject(`
+              CREATE TABLE IF NOT EXISTS ${squitchSchema}.changes (
+                change_id text PRIMARY KEY,
+                change text NOT NULL,
+                project text NOT NULL,
+                script_hash text,
+                note text,
+                committed_at timestamptz DEFAULT now()
+              );
+            `)
             const changeId = `${migration.name}-${Date.now()}`
             await client.queryObject(
-              `INSERT INTO sqitch.changes (change_id, change, script_hash, note)
-               VALUES ($1, $2, $3, $4)`,
-              [changeId, migration.name, 'manual-deploy', `Deployed via Edge Function`]
+              `INSERT INTO ${squitchSchema}.changes (change_id, change, project, script_hash, note)
+               VALUES ($1, $2, $3, $4, $5)`,
+              [changeId, migration.name, applicationName, 'manual-deploy', `Deployed via Edge Function`]
             )
-            
-            // Record in application_migrations table
-            await userClient
-              .from('application_migrations')
-              .insert({
-                application_id: application.id,
-                name: migration.name
-              })
 
             console.log(`Successfully deployed migration: ${migration.name}`)
           } catch (migrationError) {
