@@ -220,29 +220,29 @@ export function OAuthAuthorize() {
   }
 
   const registerClientIfNeeded = async () => {
-    // Check if client already exists
-    const { data: existingClient } = await supabase
-      .from('oauth_clients')
-      .select('client_id')
-      .eq('client_id', clientId)
-      .single()
+    try {
+      // Prefer INSERT with ignoreDuplicates to avoid RLS UPDATE requirement on upsert
+      const { error } = await supabase
+        .from('oauth_clients')
+        .insert({
+          client_id: clientId,
+          client_name: appIdentifier || clientId,
+          redirect_uri: redirectUri,
+          app_identifier: appIdentifier || null
+        }, { onConflict: 'client_id', ignoreDuplicates: true })
 
-    if (existingClient) {
-      return // Client already exists
-    }
-
-    // Register new client
-    const { error: insertError } = await supabase
-      .from('oauth_clients')
-      .insert([{
-        client_id: clientId,
-        client_name: appIdentifier || clientId,
-        redirect_uri: redirectUri,
-        app_identifier: appIdentifier
-      }])
-
-    if (insertError) {
-      throw new Error(`Failed to register client: ${insertError.message}`)
+      if (error) {
+        // If a duplicate key or conflict error leaks through, treat as benign and continue
+        const msg = String(error.message || '').toLowerCase()
+        if (msg.includes('duplicate') || error.code === '23505' || error.code === 'PGRST116') {
+          console.warn('Client already registered, continuing')
+          return
+        }
+        // RLS errors should not occur on INSERT due to policy, but surface them clearly
+        throw error
+      }
+    } catch (e) {
+      throw new Error(`Failed to register client: ${e.message}`)
     }
   }
   
