@@ -37,21 +37,25 @@ serve(async (req) => {
       { auth: { persistSession: false }, db: { schema: 'supakey' } }
     )
 
-    // Ensure user is logged in
+    // With verify_jwt = true, Supabase will validate Authorization and forward the request.
+    // Double-check for safety; if missing or invalid, redirect to /login with params.
     const authHeader = req.headers.get('authorization')
     const { data: { user } } = authHeader
       ? await supabase.auth.getUser(authHeader.replace('Bearer ', ''))
-      : await supabase.auth.getUser()
+      : { data: { user: null } as any }
 
     if (!user) {
-      // Render login link
-      return html(`
-        <html><body style="font-family: sans-serif;">
-          <h2>Sign in to continue</h2>
-          <p>You need to sign in to Supakey to continue.</p>
-          <a href="/login">Go to login</a>
-        </body></html>
-      `)
+      const params = new URLSearchParams({
+        client_id,
+        redirect_uri,
+        response_type,
+        state,
+        scope,
+        code_challenge,
+        code_challenge_method,
+        app_identifier
+      })
+      return new Response(null, { status: 302, headers: { ...corsHeaders, Location: `/login?${params.toString()}` } })
     }
 
     // Validate client
@@ -153,5 +157,4 @@ serve(async (req) => {
     return html('server_error', 500)
   }
 })
-
 

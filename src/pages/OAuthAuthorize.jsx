@@ -271,6 +271,13 @@ export function OAuthAuthorize() {
     navigate(`/login?${qs}`)
   }
 
+  // Strict guard: if user is not authenticated, immediately redirect to login
+  useEffect(() => {
+    if (!loading && !user) {
+      handleLogin()
+    }
+  }, [loading, user, clientId, redirectUri, responseType, state, scope, codeChallenge, codeChallengeMethod, appIdentifier])
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -304,23 +311,7 @@ export function OAuthAuthorize() {
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="max-w-md mx-auto text-center">
-          <div className="bg-white shadow-lg rounded-lg p-8">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Authorization Required</h2>
-            <p className="text-gray-600 mb-2">
-              <strong>{appIdentifier || clientId}</strong> would like to access your Supakey account.
-            </p>
-            <p className="text-sm text-gray-500 mb-6">
-              You need to sign in to authorize this application.
-            </p>
-            <button
-              onClick={handleLogin}
-              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Sign In to Authorize
-            </button>
-          </div>
-        </div>
+        <div className="text-center text-gray-600">Redirecting to login…</div>
       </div>
     )
   }

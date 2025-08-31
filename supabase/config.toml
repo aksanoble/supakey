@@ -17,7 +17,7 @@ entrypoint = "./functions/oauth-token/index.ts"
 
 [functions.oauth-authorize]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 entrypoint = "./functions/oauth-authorize/index.ts"
 
 [functions.issue-app-tokens]
