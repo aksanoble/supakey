@@ -244,9 +244,29 @@ serve(async (req) => {
       return json({ error: 'invalid_request', message: 'application account not found' }, 400)
     }
 
+    // Normalize email format for authentication
+    let normalizedEmail = account.application_username?.trim()
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+    // If it's not a full email, construct it from username
+    if (normalizedEmail && !emailRegex.test(normalizedEmail)) {
+      console.log('OAuth token: Email from database is just username, constructing full email:', normalizedEmail)
+      normalizedEmail = `${normalizedEmail}@supakey.com`
+      console.log('OAuth token: Constructed email:', normalizedEmail)
+    }
+
+    // Validate the final email format
+    if (!normalizedEmail || !emailRegex.test(normalizedEmail)) {
+      console.error('OAuth token: Invalid email format:', normalizedEmail)
+      return json({
+        error: 'invalid_request',
+        message: 'Invalid email format in application account'
+      }, 400)
+    }
+
     const target = createClient(userConnection.supabase_url, userConnection.supabase_secret_key)
     const { data: signInData, error: signInError } = await target.auth.signInWithPassword({
-      email: account.application_username,
+      email: normalizedEmail,
       password: account.application_password
     })
 

@@ -702,14 +702,33 @@ serve(async (req) => {
         )
         
         // Create or get existing auth user for Hasu application
-        const userEmail = `${username}@supakey.com`
+        console.log('Raw username from database:', username)
+        console.log('Username type:', typeof username)
+        console.log('Username is null/undefined?', username == null)
+
+        // Ensure username is valid before creating email
+        if (!username || typeof username !== 'string' || username.trim() === '') {
+          console.error('Invalid username for auth user creation:', username)
+          throw new Error('Invalid username: username is null, undefined, or empty')
+        }
+
+        const userEmail = `${username.trim()}@supakey.com`
+        console.log('Constructed user email:', userEmail)
+
+        // Basic email validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+        if (!emailRegex.test(userEmail)) {
+          console.error('Invalid email format:', userEmail)
+          throw new Error(`Invalid email format: ${userEmail}`)
+        }
+
         const userPassword = password
         let authUserId
         try {
           authUserId = await getOrCreateHasuAuthUser(targetAdminClient, userEmail, userPassword, applicationName, schemaName)
         } catch (authError) {
           console.error('Auth user creation error details:', authError)
-          throw new Error(`Failed to create auth user: ${authError.message}`)
+          throw new Error(`Failed to create auth user: Email validation error - ${authError.message}`)
         }
         
         // Update the application records in memory
@@ -792,6 +811,34 @@ serve(async (req) => {
         // Get the stored auth user info
         const authUserEmail = application.application_accounts.application_username
         const storedPassword = application.application_accounts.application_password  // This is the actual password
+
+        console.log('Auth user email from database:', authUserEmail)
+        console.log('Auth user email type:', typeof authUserEmail)
+
+        // Validate and normalize email format
+        if (!authUserEmail || typeof authUserEmail !== 'string' || authUserEmail.trim() === '') {
+          console.error('Invalid auth user email from database:', authUserEmail)
+          throw new Error('Invalid auth user email: email is null, undefined, or empty')
+        }
+
+        let normalizedEmail = authUserEmail.trim()
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+        // If it's not a full email, construct it from username
+        if (!emailRegex.test(normalizedEmail)) {
+          console.log('Email from database is just username, constructing full email:', normalizedEmail)
+          normalizedEmail = `${normalizedEmail}@supakey.com`
+          console.log('Constructed email:', normalizedEmail)
+        }
+
+        // Validate the final email format
+        if (!emailRegex.test(normalizedEmail)) {
+          console.error('Invalid email format after normalization:', normalizedEmail)
+          throw new Error(`Invalid email format after normalization: ${normalizedEmail}`)
+        }
+
+        // Update the application record with the normalized email
+        application.application_accounts.application_username = normalizedEmail
         
         // Create admin client for target database
         const targetAdminClient = createClient(
@@ -954,7 +1001,10 @@ serve(async (req) => {
             throw migrationError
           }
         }
-        
+
+        // Sample data creation moved to frontend
+        // Edge function focuses on schema deployment only
+
         // After all migrations are complete, apply RLS and grants once
         if (migrationsToRun.length > 0) {
           try {
@@ -1041,12 +1091,40 @@ serve(async (req) => {
     // Get the auth user email and password from the application account
     const authUserEmail = application.application_accounts.application_username
     const storedPassword = application.application_accounts.application_password
-    
-    console.log(`Generating real Supabase auth tokens for: ${authUserEmail}`)
+
+    console.log('Auth user email for token generation:', authUserEmail)
+    console.log('Auth user email type:', typeof authUserEmail)
+
+    // Validate and normalize email format
+    if (!authUserEmail || typeof authUserEmail !== 'string' || authUserEmail.trim() === '') {
+      console.error('Invalid auth user email for token generation:', authUserEmail)
+      throw new Error('Invalid auth user email for token generation: email is null, undefined, or empty')
+    }
+
+    let normalizedEmail = authUserEmail.trim()
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+    // If it's not a full email, construct it from username
+    if (!emailRegex.test(normalizedEmail)) {
+      console.log('Email for token generation is just username, constructing full email:', normalizedEmail)
+      normalizedEmail = `${normalizedEmail}@supakey.com`
+      console.log('Constructed email for token generation:', normalizedEmail)
+    }
+
+    // Validate the final email format
+    if (!emailRegex.test(normalizedEmail)) {
+      console.error('Invalid email format for token generation after normalization:', normalizedEmail)
+      throw new Error(`Invalid email format for token generation after normalization: ${normalizedEmail}`)
+    }
+
+    // Update the application record with the normalized email
+    application.application_accounts.application_username = normalizedEmail
+
+    console.log(`Generating real Supabase auth tokens for: ${normalizedEmail}`)
     
     // Sign in the user to get real Supabase JWT tokens
     const { data: authData, error: signInError } = await targetSupabase.auth.signInWithPassword({
-      email: authUserEmail,
+      email: normalizedEmail,
       password: storedPassword  // Use the stored password
     })
     
@@ -1065,10 +1143,10 @@ serve(async (req) => {
           throw new Error(`Failed to list users: ${listError.message}`)
         }
 
-        const user = users?.users?.find((u: any) => u.email === authUserEmail)
+        const user = users?.users?.find((u: any) => u.email === normalizedEmail)
         if (!user) {
-          console.error(`User with email ${authUserEmail} not found in admin list`)
-          throw new Error(`User with email ${authUserEmail} not found`)
+          console.error(`User with email ${normalizedEmail} not found in admin list`)
+          throw new Error(`User with email ${normalizedEmail} not found`)
         }
 
         console.log(`Found user for token generation: ${user.email}, ID: ${user.id}`)
