@@ -12,3 +12,4 @@ add_app_identifier_to_applications 2025-01-27T00:00:00Z System Administrator <ro
 add_supabase_anon_key_to_user_connections 2025-08-25T12:00:00Z System Administrator <root@medha> # Add supabase_anon_key column to user_connections table
 add_oauth_tables 2025-08-25T13:00:00Z System Administrator <root@medha> # Add OAuth client, consent, and code tables
 add_oauth_client_registration_policy 2025-08-25T18:32:28Z System Administrator <root@medha> # Add policy to allow dynamic OAuth client registration
+add_oauth_token_columns 2025-09-01T00:00:00Z System Administrator <root@medha> # Store Supakey tokens with authorization codes

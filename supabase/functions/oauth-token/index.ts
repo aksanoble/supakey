@@ -205,98 +205,32 @@ serve(async (req) => {
       }
     }
 
-    // With valid code, mint tokens by leveraging existing deploy function logic for issuance
-    // We reuse the application account set for the given app_identifier, and sign in to user's target DB
-    const appIdentifier = authCode.app_identifier
+    // With a valid code + PKCE, return Supakey (provider) tokens for Hasu to authenticate to Supakey.
+    // Tokens were stored at consent time by the frontend authorize page.
 
-    // Find application and user connection for this user
-    const { data: application } = await supabase
-      .from('applications')
-      .select('id, app_schema, user_connection_id, application_account_id')
-      .eq('app_identifier', appIdentifier)
-      .single()
+    const supakeyAccessToken = (authCode as any).supakey_access_token
+    const supakeyRefreshToken = (authCode as any).supakey_refresh_token
 
-    if (!application) {
-      return json({ 
-        error: 'application_setup_required', 
-        message: 'Application needs to be set up. Please run migrations first.',
-        app_identifier: appIdentifier 
-      }, 400)
-    }
-
-    const { data: userConnection } = await supabase
-      .from('user_connections')
-      .select('supabase_url, supabase_secret_key, supabase_anon_key, personal_access_token, postgres_url')
-      .eq('id', application.user_connection_id)
-      .single()
-
-    if (!userConnection) {
-      return json({ error: 'invalid_request', message: 'user connection not found' }, 400)
-    }
-
-    const { data: account } = await supabase
-      .from('application_accounts')
-      .select('application_username, application_password')
-      .eq('id', application.application_account_id)
-      .single()
-
-    if (!account) {
-      return json({ error: 'invalid_request', message: 'application account not found' }, 400)
-    }
-
-    // Normalize email format for authentication
-    let normalizedEmail = account.application_username?.trim()
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
-    // If it's not a full email, construct it from username
-    if (normalizedEmail && !emailRegex.test(normalizedEmail)) {
-      console.log('OAuth token: Email from database is just username, constructing full email:', normalizedEmail)
-      normalizedEmail = `${normalizedEmail}@supakey.com`
-      console.log('OAuth token: Constructed email:', normalizedEmail)
-    }
-
-    // Validate the final email format
-    if (!normalizedEmail || !emailRegex.test(normalizedEmail)) {
-      console.error('OAuth token: Invalid email format:', normalizedEmail)
+    if (!supakeyAccessToken || !supakeyRefreshToken) {
       return json({
-        error: 'invalid_request',
-        message: 'Invalid email format in application account'
-      }, 400)
+        error: 'server_error',
+        message: 'Authorization code missing provider tokens. Please re-authorize.'
+      }, 500)
     }
 
-    const target = createClient(userConnection.supabase_url, userConnection.supabase_secret_key)
-    const { data: signInData, error: signInError } = await target.auth.signInWithPassword({
-      email: normalizedEmail,
-      password: account.application_password
-    })
-
-    if (signInError || !signInData.session) {
-      return json({ error: 'server_error', message: 'failed to mint tokens' }, 500)
-    }
-
-    // Do not deploy migrations here. The client will call the dedicated deploy-migrations function post-OAuth.
-
-    // One-time use: delete code
+    // Delete code after use
     await supabase.from('oauth_authorization_codes').delete().eq('code', code)
 
     return json({
-      access_token: signInData.session.access_token,
-      refresh_token: signInData.session.refresh_token,
+      access_token: supakeyAccessToken,
+      refresh_token: supakeyRefreshToken,
       token_type: 'bearer',
-      expires_in: 3600,
+      // Informational fields
       scope: authCode.scope,
-      supabase_url: userConnection.supabase_url,
-      anon_key: userConnection.supabase_anon_key,
-      user_id: signInData.session.user.id,
-      application_id: application.id,
-      // Include user information for display purposes
-      name: signInData.session.user.raw_user_meta_data?.display_name,
-      email: signInData.session.user.email,
-      user: signInData.session.user  // Include full user object for compatibility
+      user_id: authCode.user_id
     })
   } catch (e) {
     return json({ error: 'server_error' }, 500)
   }
 })
-
 

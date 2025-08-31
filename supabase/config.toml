@@ -19,3 +19,15 @@ entrypoint = "./functions/oauth-token/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/oauth-authorize/index.ts"
+
+[functions.issue-app-tokens]
+enabled = true
+# Require a valid Supabase JWT for issuing app tokens
+verify_jwt = true
+entrypoint = "./functions/issue-app-tokens/index.ts"
+
+[functions.deploy-migrations]
+enabled = true
+# Require authentication; migrations can only be invoked by signed-in users
+verify_jwt = true
+entrypoint = "./functions/deploy-migrations/index.ts"

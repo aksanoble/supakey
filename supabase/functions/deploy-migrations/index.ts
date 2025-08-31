@@ -22,14 +22,12 @@ interface DeployMigrationsRequest {
   applicationId?: string
 }
 
-interface AuthResponse {
-  jwt: string
-  refreshToken: string
-  username: string
-  userId: string
+// Migrations endpoint response (no tokens)
+interface MigrationsResponse {
+  success: boolean
   applicationId: string
-  databaseUrl: string
-  anonKey: string
+  appIdentifier: string
+  databaseUrl?: string
 }
 
 // Helper function to derive schema name from app identifier
@@ -364,8 +362,14 @@ serve(async (req) => {
   try {
     console.log('Edge function called')
     
-    // Get the authorization header (optional: we support fallback via applicationId)
+    // Require Authorization header with Supabase JWT
     const authHeader = req.headers.get('authorization')
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: 'unauthorized', message: 'Missing Authorization header' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     // Initialize Supabase client (service role) targeting the supakey schema explicitly
     const supabaseClient = createClient(
@@ -381,14 +385,17 @@ serve(async (req) => {
 
     // Try to resolve Supakey user if auth header provided
     let supakeyUser: any | null = null
-    if (authHeader) {
+    {
       const jwtToken = authHeader.replace('Bearer ', '')
       const { data: { user }, error: authError } = await supabaseClient.auth.getUser(jwtToken)
       if (!authError && user) {
         supakeyUser = user
         console.log('User authenticated:', user.email)
       } else {
-        console.log('Supakey auth not available; will try applicationId fallback if provided')
+        return new Response(
+          JSON.stringify({ error: 'unauthorized', message: 'Invalid or expired token' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
       }
     }
 
@@ -418,41 +425,21 @@ serve(async (req) => {
     // Get the user's connection via Supakey user (RLS) or fallback by applicationId (service role)
     let userConnection: any = null
     let connError: any = null
-    if (supakeyUser) {
-      console.log('Looking up user connection for user:', supakeyUser.id)
-      const res = await userClient
-        .from('user_connections')
-        .select(`
-          id,
-          postgres_url,
-          supabase_url,
-          supabase_anon_key,
-          supabase_secret_key,
-          personal_access_token
-        `)
-        .eq('user_id', supakeyUser.id)
-        .single()
-      userConnection = res.data
-      connError = res.error
-    } else if (applicationId) {
-      console.log('Falling back to applicationId lookup for user connection:', applicationId)
-      const appRes = await supabaseClient
-        .from('applications')
-        .select('user_connection_id')
-        .eq('id', applicationId)
-        .single()
-      if (!appRes.error && appRes.data?.user_connection_id) {
-        const connRes = await supabaseClient
-          .from('user_connections')
-          .select('id, postgres_url, supabase_url, supabase_anon_key, supabase_secret_key, personal_access_token')
-          .eq('id', appRes.data.user_connection_id)
-          .single()
-        userConnection = connRes.data
-        connError = connRes.error
-      } else {
-        connError = appRes.error || new Error('Application not found')
-      }
-    }
+    console.log('Looking up user connection for user:', supakeyUser.id)
+    const res = await userClient
+      .from('user_connections')
+      .select(`
+        id,
+        postgres_url,
+        supabase_url,
+        supabase_anon_key,
+        supabase_secret_key,
+        personal_access_token
+      `)
+      .eq('user_id', supakeyUser.id)
+      .single()
+    userConnection = res.data
+    connError = res.error
 
     if (connError || !userConnection) {
       console.log('User connection error:', connError)
@@ -712,7 +699,12 @@ serve(async (req) => {
           throw new Error('Invalid username: username is null, undefined, or empty')
         }
 
-        const userEmail = `${username.trim()}@supakey.com`
+        // Sanitize username to a valid email local-part: [a-z0-9.+-], collapse others to '.'
+        let localPart = username.trim().toLowerCase().replace(/[^a-z0-9.+-]/g, '.')
+        localPart = localPart.replace(/\.+/g, '.').replace(/^\.+|\.+$/g, '')
+        if (!localPart) localPart = 'app'
+        if (localPart.length > 60) localPart = localPart.slice(0, 60)
+        const userEmail = `${localPart}@supakey.com`
         console.log('Constructed user email:', userEmail)
 
         // Basic email validation
@@ -824,10 +816,14 @@ serve(async (req) => {
         let normalizedEmail = authUserEmail.trim()
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-        // If it's not a full email, construct it from username
+        // If it's not a full email, construct a sanitized one from username
         if (!emailRegex.test(normalizedEmail)) {
-          console.log('Email from database is just username, constructing full email:', normalizedEmail)
-          normalizedEmail = `${normalizedEmail}@supakey.com`
+          console.log('Email from database is just username, constructing sanitized email:', normalizedEmail)
+          let lp = normalizedEmail.trim().toLowerCase().replace(/[^a-z0-9.+-]/g, '.')
+          lp = lp.replace(/\.+/g, '.').replace(/^\.+|\.+$/g, '')
+          if (!lp) lp = 'app'
+          if (lp.length > 60) lp = lp.slice(0, 60)
+          normalizedEmail = `${lp}@supakey.com`
           console.log('Constructed email:', normalizedEmail)
         }
 
@@ -1082,152 +1078,20 @@ serve(async (req) => {
       )
     }
 
-    // Create Supabase client for the target database to generate real auth tokens
-    const targetSupabase = createClient(
-      userConnection.supabase_url, 
-      userConnection.supabase_secret_key
-    )
-    
-    // Get the auth user email and password from the application account
-    const authUserEmail = application.application_accounts.application_username
-    const storedPassword = application.application_accounts.application_password
-
-    console.log('Auth user email for token generation:', authUserEmail)
-    console.log('Auth user email type:', typeof authUserEmail)
-
-    // Validate and normalize email format
-    if (!authUserEmail || typeof authUserEmail !== 'string' || authUserEmail.trim() === '') {
-      console.error('Invalid auth user email for token generation:', authUserEmail)
-      throw new Error('Invalid auth user email for token generation: email is null, undefined, or empty')
-    }
-
-    let normalizedEmail = authUserEmail.trim()
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
-    // If it's not a full email, construct it from username
-    if (!emailRegex.test(normalizedEmail)) {
-      console.log('Email for token generation is just username, constructing full email:', normalizedEmail)
-      normalizedEmail = `${normalizedEmail}@supakey.com`
-      console.log('Constructed email for token generation:', normalizedEmail)
-    }
-
-    // Validate the final email format
-    if (!emailRegex.test(normalizedEmail)) {
-      console.error('Invalid email format for token generation after normalization:', normalizedEmail)
-      throw new Error(`Invalid email format for token generation after normalization: ${normalizedEmail}`)
-    }
-
-    // Update the application record with the normalized email
-    application.application_accounts.application_username = normalizedEmail
-
-    console.log(`Generating real Supabase auth tokens for: ${normalizedEmail}`)
-    
-    // Sign in the user to get real Supabase JWT tokens
-    const { data: authData, error: signInError } = await targetSupabase.auth.signInWithPassword({
-      email: normalizedEmail,
-      password: storedPassword  // Use the stored password
-    })
-    
-    if (signInError || !authData.session) {
-      console.error('Failed to generate auth tokens via sign in:', signInError?.message)
-      
-      // Try to create a session using admin API as fallback
-      try {
-        console.log('Attempting admin API fallback for token generation...')
-        console.log('Looking for user:', authUserEmail)
-
-        // First, find the user by email to get their ID
-        const { data: users, error: listError } = await targetSupabase.auth.admin.listUsers()
-        if (listError) {
-          console.error('Failed to list users:', listError.message)
-          throw new Error(`Failed to list users: ${listError.message}`)
-        }
-
-        const user = users?.users?.find((u: any) => u.email === normalizedEmail)
-        if (!user) {
-          console.error(`User with email ${normalizedEmail} not found in admin list`)
-          throw new Error(`User with email ${normalizedEmail} not found`)
-        }
-
-        console.log(`Found user for token generation: ${user.email}, ID: ${user.id}`)
-
-        // Create a custom JWT token for the user
-        // In production, you'd use a proper JWT library, but for now we'll create a simple token
-        const payload = {
-          sub: user.id,
-          email: user.email,
-          role: 'authenticated',
-          iat: Math.floor(Date.now() / 1000),
-          exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60), // 24 hours
-          app_metadata: user.app_metadata || {},
-          user_metadata: user.user_metadata || {}
-        }
-
-        // For now, create a simple token structure (in production, use proper JWT signing)
-        const accessToken = `custom_token_${user.id}_${Date.now()}_${Math.random().toString(36).substring(2)}`
-
-        // Create a proper session response
-        const fallbackAuthData = {
-          session: {
-            access_token: accessToken,
-            refresh_token: `refresh_${user.id}_${Date.now()}`,
-            user: {
-              id: user.id,
-              email: user.email,
-              user_metadata: user.user_metadata || {},
-              app_metadata: user.app_metadata || {}
-            }
-          }
-        }
-
-        console.log('Using custom token generation as fallback')
-
-        const response: AuthResponse = {
-          jwt: fallbackAuthData.session.access_token,
-          refreshToken: fallbackAuthData.session.refresh_token,
-          username: authUserEmail,
-          userId: fallbackAuthData.session.user.id,
-          applicationId: application.id,
-          databaseUrl: userConnection.supabase_url,
-          anonKey: userConnection.supabase_anon_key
-        }
-
-        console.log('Authentication successful with custom token fallback for application:', applicationName)
-
-        return new Response(
-          JSON.stringify(response),
-          {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          }
-        )
-
-      } catch (fallbackError) {
-        console.error('Both sign-in and custom token generation failed:', fallbackError.message)
-        console.error('Fallback error details:', JSON.stringify(fallbackError, null, 2))
-        throw new Error(`Failed to generate auth tokens: Invalid login credentials. Admin fallback: ${fallbackError.message}`)
-      }
-    }
-    
-    const response: AuthResponse = {
-      jwt: authData.session.access_token,
-      refreshToken: authData.session.refresh_token,
-      username: authUserEmail,
-      userId: authData.session.user.id,
+    // Do not return tokens from this function. Only report success and identifiers.
+    const response: MigrationsResponse = {
+      success: true,
       applicationId: application.id,
-      databaseUrl: userConnection.supabase_url,
-      anonKey: userConnection.supabase_anon_key
+      appIdentifier: appIdentifier,
+      databaseUrl: userConnection.supabase_url
     }
 
-    console.log('Authentication successful for application:', applicationName)
+    console.log('Migrations completed for application:', applicationName)
 
-    return new Response(
-      JSON.stringify(response),
-      { 
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-      }
-    )
+    return new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
 
   } catch (error) {
     console.error('Edge Function error:', error)

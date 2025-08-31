@@ -154,7 +154,12 @@ export function OAuthAuthorize() {
       const authCode = generateAuthCode()
       console.log('Generated auth code:', authCode?.substring(0, 10) + '...')
 
-      // Store authorization details for later token exchange
+      // Get current Supakey session tokens to return later from oauth-token
+      const { data: sessionData } = await supabase.auth.getSession()
+      const supakeyAccessToken = sessionData?.session?.access_token || null
+      const supakeyRefreshToken = sessionData?.session?.refresh_token || null
+
+      // Store authorization details for later token exchange (including Supakey tokens)
       const authData = {
         code: authCode,
         user_id: user.id,
@@ -164,7 +169,10 @@ export function OAuthAuthorize() {
         code_challenge_method: codeChallengeMethod,
         app_identifier: appIdentifier,
         scope: scope || 'default',
-        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString() // 10 minutes
+        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
+        // New fields to support returning Supakey tokens at token exchange step
+        supakey_access_token: supakeyAccessToken,
+        supakey_refresh_token: supakeyRefreshToken
       }
 
       console.log('Storing authorization data:', {
