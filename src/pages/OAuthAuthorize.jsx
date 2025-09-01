@@ -1,14 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext.jsx'
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-
-const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  db: { schema: 'supakey' }
-})
+import { supabase } from '../lib/supabaseClient'
 
 export function OAuthAuthorize() {
   const [searchParams] = useSearchParams()
