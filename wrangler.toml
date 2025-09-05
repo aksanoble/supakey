@@ -1,15 +1,13 @@
-name = "supakey-site"
-compatibility_date = "2025-09-05"
-workers_dev = true
+name = "supakey"
+main = "src/index.ts"
+compatibility_date = "2025-09-06"
 
-# Serve the built Vite assets (build to dist before deploying)
+# routes must be an array of route objects
+routes = [
+  { pattern = "supakey.app", custom_domain = true },
+  { pattern = "www.supakey.app", custom_domain = true }
+]
+
 [assets]
 directory = "dist"
-# SPA routing: rewrite unknown paths to index.html
-not_found_handling = "single-page-app"
-
-# Optional: when you’re ready to attach a custom domain, replace workers_dev with routes.
- [routes]
- patterns = [
-   { pattern = "supakey.app", custom_domain = true },
-]
+not_found_handling = "single-page-application"
