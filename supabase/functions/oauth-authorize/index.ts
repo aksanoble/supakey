@@ -1,9 +1,17 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
+const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') || '').split(',').map(s => s.trim()).filter(Boolean)
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get('origin') || ''
+  const allowed = ALLOWED_ORIGINS.includes(origin)
+  const base: Record<string, string> = {
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Vary': 'Origin'
+  }
+  if (allowed) base['Access-Control-Allow-Origin'] = origin
+  return { headers: base, allowed }
 }
 
 function html(body: string, status = 200) {
@@ -14,7 +22,10 @@ function html(body: string, status = 200) {
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  if (req.method === 'OPTIONS') {
+    const { headers } = getCorsHeaders(req)
+    return new Response('ok', { headers })
+  }
 
   try {
     const url = new URL(req.url)
@@ -28,7 +39,8 @@ serve(async (req) => {
     const app_identifier = url.searchParams.get('app_identifier') || ''
 
     if (response_type !== 'code') {
-      return html('unsupported_response_type', 400)
+      const { headers } = getCorsHeaders(req)
+      return new Response('unsupported_response_type', { status: 400, headers })
     }
 
     const supabase = createClient(
@@ -55,7 +67,8 @@ serve(async (req) => {
         code_challenge_method,
         app_identifier
       })
-      return new Response(null, { status: 302, headers: { ...corsHeaders, Location: `/login?${params.toString()}` } })
+      const { headers } = getCorsHeaders(req)
+      return new Response(null, { status: 302, headers: { ...headers, Location: `/login?${params.toString()}` } })
     }
 
     // Validate client
@@ -66,11 +79,13 @@ serve(async (req) => {
       .single()
 
     if (!client) {
-      return html('invalid_client', 400)
+      const { headers } = getCorsHeaders(req)
+      return new Response('invalid_client', { status: 400, headers })
     }
 
     if (client.redirect_uri !== redirect_uri) {
-      return html('invalid_redirect_uri', 400)
+      const { headers } = getCorsHeaders(req)
+      return new Response('invalid_redirect_uri', { status: 400, headers })
     }
 
     // Check consent
@@ -98,7 +113,8 @@ serve(async (req) => {
           <button type="submit" style="padding: 10px 16px; background:#2d3748; color:#fff; border:none; border-radius:8px;">Allow</button>
         </form>
       </body></html>`
-      return html(consentHtml)
+      const { headers } = getCorsHeaders(req)
+      return new Response(consentHtml, { status: 200, headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' } })
     }
 
     // If already consented, convert to POST handling to issue code
@@ -149,12 +165,14 @@ serve(async (req) => {
       redirect.searchParams.set('code', code)
       if (st) redirect.searchParams.set('state', st)
 
-      return new Response(null, { status: 302, headers: { ...corsHeaders, Location: redirect.toString() } })
+      const { headers } = getCorsHeaders(req)
+      return new Response(null, { status: 302, headers: { ...headers, Location: redirect.toString() } })
     }
 
-    return html('method_not_allowed', 405)
+    const { headers } = getCorsHeaders(req)
+    return new Response('method_not_allowed', { status: 405, headers })
   } catch (e) {
-    return html('server_error', 500)
+    const { headers } = getCorsHeaders(req)
+    return new Response('server_error', { status: 500, headers })
   }
 })
-

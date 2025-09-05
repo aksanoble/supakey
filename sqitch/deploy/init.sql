@@ -8,7 +8,7 @@ BEGIN;
 -- - user_connections: multiple connections per user (postgres url, supabase details)
 -- - applications: apps linked to specific user connections
 -- - application_accounts: separate table for app credentials
--- - application_migrations: migration entries per application
+-- (Removed) application_migrations: previously tracked per-app migrations
 
 -- Create the supakey schema
 CREATE SCHEMA IF NOT EXISTS supakey;
@@ -45,19 +45,13 @@ create table if not exists supakey.applications (
 	updated_at timestamptz default now()
 );
 
-create table if not exists supakey.application_migrations (
-	id uuid primary key default gen_random_uuid(),
-	application_id uuid not null references supakey.applications(id) on delete cascade,
-	name text not null,
-	run_on timestamptz default now(),
-	unique(application_id, name)
-);
+-- application_migrations removed; Sqitch registry in target DB is the source of truth
 
 -- For RLS, enable and add policies allowing users to access their rows
 alter table supakey.user_connections enable row level security;
 alter table supakey.application_accounts enable row level security;
 alter table supakey.applications enable row level security;
-alter table supakey.application_migrations enable row level security;
+-- application_migrations removed
 
 -- Policies
 create policy "user can manage own connections" on supakey.user_connections
@@ -91,26 +85,10 @@ create policy "user can manage own apps" on supakey.applications
 		)
 	);
 
-create policy "user can manage app migrations" on supakey.application_migrations
-	for all using (
-		exists (
-			select 1 from supakey.applications a
-			join supakey.user_connections uc on a.user_connection_id = uc.id
-			where a.id = application_id and uc.user_id = auth.uid()
-		)
-	) with check (
-		exists (
-			select 1 from supakey.applications a
-			join supakey.user_connections uc on a.user_connection_id = uc.id
-			where a.id = application_id and uc.user_id = auth.uid()
-		)
-	);
+-- application_migrations policies removed
 
 -- Helpful view: last migration per app
-create or replace view supakey.application_last_migration as
-select application_id, max(run_on) as last_run_at
-from supakey.application_migrations
-group by application_id;
+-- application_last_migration view removed
 
 grant usage on schema supakey to authenticated, service_role;
 

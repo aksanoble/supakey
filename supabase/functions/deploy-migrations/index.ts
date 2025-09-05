@@ -2,9 +2,17 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { cryptoRandomString } from 'https://deno.land/x/crypto_random_string@1.1.0/mod.ts'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') || '').split(',').map(s => s.trim()).filter(Boolean)
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get('origin') || ''
+  const allowed = ALLOWED_ORIGINS.includes(origin)
+  const base: Record<string, string> = {
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Vary': 'Origin'
+  }
+  if (allowed) base['Access-Control-Allow-Origin'] = origin
+  return { headers: base, allowed }
 }
 
 interface DeployMigrationsRequest {
@@ -111,7 +119,7 @@ async function getOrCreateHasuAuthUser(targetAdminClient: any, userEmail: string
 
     // User doesn't exist, try to create new one
     console.log('Hasu application user not found, creating new one...')
-    console.log('Creating user with email:', userEmail)
+    console.log('Creating user with email (redacted):', userEmail.replace(/^[^@]*/, '***'))
 
     const createUserPayload = {
       email: userEmail,
@@ -129,7 +137,7 @@ async function getOrCreateHasuAuthUser(targetAdminClient: any, userEmail: string
       }
     }
 
-    console.log('Create user payload:', JSON.stringify(createUserPayload, null, 2))
+    // Do not log full payload to avoid leaking secrets
 
     const { data: newUser, error: createUserError } = await targetAdminClient.auth.admin.createUser(createUserPayload)
 
@@ -327,13 +335,13 @@ async function applySchemaGrants(client: any, schemaName: string): Promise<void>
     console.log(`Applying grants for schema: ${schemaName}`)
     
     const grantStatements = [
-      `GRANT USAGE ON SCHEMA ${schemaName} TO anon, authenticated, service_role;`,
-      `GRANT ALL ON ALL TABLES IN SCHEMA ${schemaName} TO anon, authenticated, service_role;`,
-      `GRANT ALL ON ALL ROUTINES IN SCHEMA ${schemaName} TO anon, authenticated, service_role;`,
-      `GRANT ALL ON ALL SEQUENCES IN SCHEMA ${schemaName} TO anon, authenticated, service_role;`,
-      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${schemaName} GRANT ALL ON TABLES TO anon, authenticated, service_role;`,
-      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${schemaName} GRANT ALL ON ROUTINES TO anon, authenticated, service_role;`,
-      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${schemaName} GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;`
+      `GRANT USAGE ON SCHEMA ${schemaName} TO authenticator, authenticated, service_role;`,
+      `GRANT ALL ON ALL TABLES IN SCHEMA ${schemaName} TO authenticated, service_role;`,
+      `GRANT ALL ON ALL ROUTINES IN SCHEMA ${schemaName} TO authenticated, service_role;`,
+      `GRANT ALL ON ALL SEQUENCES IN SCHEMA ${schemaName} TO authenticated, service_role;`,
+      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${schemaName} GRANT ALL ON TABLES TO authenticated, service_role;`,
+      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${schemaName} GRANT ALL ON ROUTINES TO authenticated, service_role;`,
+      `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA ${schemaName} GRANT ALL ON SEQUENCES TO authenticated, service_role;`
     ]
     
     for (const statement of grantStatements) {
@@ -355,8 +363,12 @@ async function applySchemaGrants(client: any, schemaName: string): Promise<void>
 }
 
 serve(async (req) => {
+  const { headers, allowed } = getCorsHeaders(req)
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+    return new Response('ok', { headers })
+  }
+  if (!allowed) {
+    return new Response(JSON.stringify({ error: 'origin_not_allowed' }), { status: 403, headers: { ...headers, 'Content-Type': 'application/json' } })
   }
 
   try {
@@ -367,7 +379,7 @@ serve(async (req) => {
     if (!authHeader) {
       return new Response(
         JSON.stringify({ error: 'unauthorized', message: 'Missing Authorization header' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 401, headers: { ...headers, 'Content-Type': 'application/json' } }
       )
     }
 
@@ -394,7 +406,7 @@ serve(async (req) => {
       } else {
         return new Response(
           JSON.stringify({ error: 'unauthorized', message: 'Invalid or expired token' }),
-          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          { status: 401, headers: { ...headers, 'Content-Type': 'application/json' } }
         )
       }
     }
@@ -418,7 +430,7 @@ serve(async (req) => {
       console.log('Missing required fields')
       return new Response(
         JSON.stringify({ error: 'Missing required fields: applicationName, appIdentifier, migrationsDir.plan or migrationsBaseUrl or migrations[]' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } }
       )
     }
 
@@ -445,7 +457,7 @@ serve(async (req) => {
       console.log('User connection error:', connError)
       return new Response(
         JSON.stringify({ error: 'No database connection found for user/application' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 404, headers: { ...headers, 'Content-Type': 'application/json' } }
       )
     }
 
@@ -454,7 +466,7 @@ serve(async (req) => {
     if (!userConnection.postgres_url) {
       return new Response(
         JSON.stringify({ error: 'No database connection found for this application' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } }
       )
     }
 
@@ -689,9 +701,7 @@ serve(async (req) => {
         )
         
         // Create or get existing auth user for Hasu application
-        console.log('Raw username from database:', username)
-        console.log('Username type:', typeof username)
-        console.log('Username is null/undefined?', username == null)
+        // Avoid logging raw username details
 
         // Ensure username is valid before creating email
         if (!username || typeof username !== 'string' || username.trim() === '') {
@@ -705,7 +715,7 @@ serve(async (req) => {
         if (!localPart) localPart = 'app'
         if (localPart.length > 60) localPart = localPart.slice(0, 60)
         const userEmail = `${localPart}@supakey.com`
-        console.log('Constructed user email:', userEmail)
+        console.log('Constructed user email (redacted):', userEmail.replace(/^[^@]*/, '***'))
 
         // Basic email validation
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -719,7 +729,7 @@ serve(async (req) => {
         try {
           authUserId = await getOrCreateHasuAuthUser(targetAdminClient, userEmail, userPassword, applicationName, schemaName)
         } catch (authError) {
-          console.error('Auth user creation error details:', authError)
+          console.error('Auth user creation error:', authError?.message)
           throw new Error(`Failed to create auth user: Email validation error - ${authError.message}`)
         }
         
@@ -1068,13 +1078,13 @@ serve(async (req) => {
       await client.end()
 
     } catch (dbError) {
-      console.error('Database error:', dbError)
+      console.error('Database error:', dbError?.message)
       return new Response(
         JSON.stringify({ 
           error: 'Failed to connect to target database or run migrations', 
           details: dbError.message 
         }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } }
       )
     }
 
