@@ -47,20 +47,10 @@ export function OAuthAuthorize() {
 
   const checkClientAndConsent = async () => {
     try {
-      // Check if user has complete connection details first
-      const { data: connectionDataArray } = await supabase
-        .from('user_connections')
-        .select('supabase_url, supabase_anon_key, supabase_secret_key, personal_access_token')
-        .eq('user_id', user.id)
-      
-      const connectionData = connectionDataArray?.[0] || null
-      
-      // Check if all required fields are present and not empty
-      const hasCompleteConnection = connectionData && 
-        connectionData.supabase_url && 
-        connectionData.supabase_anon_key && 
-        connectionData.supabase_secret_key && 
-        connectionData.personal_access_token
+      // Query secure connection status via edge function (booleans only)
+      const { data: statusRes, error: statusErr } = await supabase.functions.invoke('connection-status', { body: {} })
+      if (statusErr) throw statusErr
+      const hasCompleteConnection = !!statusRes?.complete
       
       if (!hasCompleteConnection) {
         // Store OAuth parameters and redirect to profile setup
@@ -75,11 +65,11 @@ export function OAuthAuthorize() {
           app_identifier: appIdentifier
         }))
         
-        navigate('/', { 
-          state: { 
-            message: 'Please complete your connection settings before authorizing applications.' 
-          }
-        })
+        const missing = Array.isArray(statusRes?.missing) ? statusRes.missing : []
+        const msg = missing.length
+          ? `Please complete your connection settings (${missing.join(', ')}) before authorizing applications.`
+          : 'Please complete your connection settings before authorizing applications.'
+        navigate('/', { state: { message: msg } })
         return
       }
       

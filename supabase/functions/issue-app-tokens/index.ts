@@ -97,7 +97,7 @@ serve(async (req) => {
     // Get connection and app account using service role (RLS-independent lookups)
     const { data: conn, error: connErr } = await supabaseAdmin
       .from('user_connections')
-      .select('id, supabase_url, supabase_secret_key, supabase_anon_key')
+      .select('id, supabase_url, supabase_anon_key')
       .eq('id', application.user_connection_id)
       .single()
     if (connErr || !conn) return json({ error: 'server_error', message: 'connection not found' }, 500)
@@ -116,7 +116,8 @@ serve(async (req) => {
     if (!emailRegex.test(email)) return json({ error: 'invalid_request', message: 'Invalid email format in application account' }, 400)
 
     // Sign in to target project to mint tokens for Hasu app
-    const target = createClient(conn.supabase_url, conn.supabase_secret_key)
+    // Use anon key (client sign-in) instead of service role to avoid exposing server credentials
+    const target = createClient(conn.supabase_url, conn.supabase_anon_key)
     const { data: signInData, error: signInError } = await target.auth.signInWithPassword({
       email,
       password: acct.application_password

@@ -23,7 +23,8 @@ export function Profile() {
       if (!user) return;
       const { data: dataArray, error } = await supabase
         .from("user_connections")
-        .select("*")
+        // Do not fetch sensitive columns to the browser
+        .select("supabase_url, supabase_anon_key")
         .eq("user_id", user.id);
 
       const data = dataArray?.[0] || null;
@@ -31,13 +32,14 @@ export function Profile() {
       if (error) {
         setMessage(error.message);
       } else if (data) {
-        setForm({
-          postgres_url: data.postgres_url || "",
+        setForm((prev) => ({
+          // Never prefill sensitive values client-side
+          postgres_url: "",
           supabase_url: data.supabase_url || "",
           supabase_anon_key: data.supabase_anon_key || "",
-          supabase_secret_key: data.supabase_secret_key || "",
-          personal_access_token: data.personal_access_token || "",
-        });
+          supabase_secret_key: "",
+          personal_access_token: "",
+        }));
       }
     }
     load();
@@ -52,11 +54,11 @@ export function Profile() {
     setMessage("");
 
     // Validate all required fields
+    // Only require non-sensitive fields on the client.
+    // Secret key and PAT can be set without being read back; leave blank to keep existing.
     const requiredFields = [
       { field: "supabase_url", name: "Supabase URL" },
       { field: "supabase_anon_key", name: "Supabase Anon Key" },
-      { field: "supabase_secret_key", name: "Supabase Secret Key" },
-      { field: "personal_access_token", name: "Personal Access Token" },
     ];
 
     for (const { field, name } of requiredFields) {
@@ -76,14 +78,15 @@ export function Profile() {
       return;
     }
 
+    // Build payload without sensitive fields if left blank, to avoid overwriting stored secrets
     const upsertPayload = {
       user_id: user.id,
-      postgres_url: form.postgres_url || null,
       supabase_url: form.supabase_url,
       supabase_anon_key: form.supabase_anon_key,
-      supabase_secret_key: form.supabase_secret_key,
-      personal_access_token: form.personal_access_token,
     };
+    if (form.postgres_url && form.postgres_url.trim()) upsertPayload.postgres_url = form.postgres_url.trim();
+    if (form.supabase_secret_key && form.supabase_secret_key.trim()) upsertPayload.supabase_secret_key = form.supabase_secret_key.trim();
+    if (form.personal_access_token && form.personal_access_token.trim()) upsertPayload.personal_access_token = form.personal_access_token.trim();
 
     const { error } = await supabase
       .from("user_connections")
