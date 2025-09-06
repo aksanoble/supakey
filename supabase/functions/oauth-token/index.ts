@@ -14,12 +14,7 @@ function getCorsHeaders(req: Request) {
   return { headers: base, allowed }
 }
 
-function json(body: any, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-  })
-}
+// (removed legacy json helper; all responses include CORS via getCorsHeaders)
 
 // Helpers to align with deploy-migrations edge function
 function deriveSchemaName(appIdentifier: string): string {
@@ -83,7 +78,8 @@ serve(async (req) => {
   try {
     console.log('OAuth token endpoint called')
     const { headers, allowed } = getCorsHeaders(req)
-    if (!allowed) return new Response(JSON.stringify({ error: 'origin_not_allowed' }), { status: 403, headers: { ...headers, 'Content-Type': 'application/json' } })
+    const respond = (status: number, body: Record<string, unknown>) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json' } })
+    if (!allowed) return respond(403, { error: 'origin_not_allowed', message: 'Origin is not in ALLOWED_ORIGINS', origin: req.headers.get('origin') || null })
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -101,15 +97,10 @@ serve(async (req) => {
 
     const contentType = req.headers.get('content-type') || ''
     if (!contentType.includes('application/json')) {
-      return new Response(JSON.stringify({ error: 'invalid_request', message: 'content-type must be application/json' }), { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } })
+      return respond(400, { error: 'invalid_request', message: 'Content-Type must be application/json' })
     }
 
-    // Require apikey header to match anon key to reduce abuse
-    const apiKeyHeader = req.headers.get('apikey') || ''
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || ''
-    if (!apiKeyHeader || apiKeyHeader !== anonKey) {
-      return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { ...headers, 'Content-Type': 'application/json' } })
-    }
+    // No apikey header check; rely on CORS + parameter validation
     const body = await req.json()
 
     console.log('Request body:', body)
@@ -118,13 +109,23 @@ serve(async (req) => {
 
     if (grant_type !== 'authorization_code') {
       console.log('Unsupported grant type:', grant_type)
-      return new Response(JSON.stringify({ error: 'unsupported_grant_type' }), { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } })
+      return respond(400, { error: 'unsupported_grant_type', message: 'Only authorization_code is supported', got: grant_type })
     }
 
     const code = body.code
     const redirect_uri = body.redirect_uri
     const client_id = body.client_id
     const code_verifier = body.code_verifier
+
+    // Parameter presence validation
+    const missing: string[] = []
+    if (!code) missing.push('code')
+    if (!redirect_uri) missing.push('redirect_uri')
+    if (!client_id) missing.push('client_id')
+    if (!code_verifier) missing.push('code_verifier')
+    if (missing.length) {
+      return respond(400, { error: 'invalid_request', message: 'Missing required parameters', missing })
+    }
 
     console.log('Token exchange params:', { code: code?.substring(0, 10) + '...', redirect_uri, client_id, code_verifier: code_verifier?.substring(0, 10) + '...' })
 
@@ -147,25 +148,19 @@ serve(async (req) => {
 
     if (codeError || !authCode) {
       console.log('Authorization code not found or error:', codeError)
-      return new Response(JSON.stringify({
+      return respond(400, {
         error: 'invalid_grant',
         message: 'Authorization code not found',
-        details: {
-          codeError: codeError?.message,
-          codeReceived: code?.substring(0, 10) + '...'
-        }
-      }), { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } })
+        details: { codeError: codeError?.message || null, code_prefix: String(code || '').slice(0, 10) }
+      })
     }
 
     if (new Date(authCode.expires_at).getTime() < Date.now()) {
-      return new Response(JSON.stringify({
+      return respond(400, {
         error: 'invalid_grant',
         message: 'Authorization code expired',
-        details: {
-          expires_at: authCode.expires_at,
-          now: new Date().toISOString()
-        }
-      }), { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } })
+        details: { expires_at: authCode.expires_at, now: new Date().toISOString() }
+      })
     }
 
     console.log('Comparing redirect URIs:')
@@ -177,7 +172,7 @@ serve(async (req) => {
 
     if (authCode.redirect_uri !== redirect_uri || authCode.client_id !== client_id) {
       console.log('Redirect URI or client ID mismatch!')
-      return json({
+      return new Response(JSON.stringify({
         error: 'invalid_grant',
         message: 'Redirect URI or client ID mismatch',
         details: {
@@ -186,7 +181,7 @@ serve(async (req) => {
           stored_client_id: authCode.client_id,
           request_client_id: client_id
         }
-      }, 400)
+      }), { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } })
     }
 
     console.log('Redirect URI and client ID validation passed')
@@ -194,10 +189,10 @@ serve(async (req) => {
     // If PKCE was used, verify code verifier
     if (authCode.code_challenge) {
       if (!code_verifier) {
-        return json({
+        return new Response(JSON.stringify({
           error: 'invalid_request',
           message: 'Code verifier required for PKCE'
-        }, 400)
+        }), { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } })
       }
 
       const algo = authCode.code_challenge_method === 'S256' ? 'SHA-256' : null
@@ -205,25 +200,19 @@ serve(async (req) => {
         const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code_verifier))
         const base64 = btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
         if (base64 !== authCode.code_challenge) {
-          return new Response(JSON.stringify({
-            error: 'invalid_grant',
-            message: 'PKCE verification failed',
-            details: {
-              expected: authCode.code_challenge,
-              received: base64
-            }
-          }), { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } })
+      return respond(400, {
+        error: 'invalid_grant',
+        message: 'PKCE verification failed',
+        details: { expected: authCode.code_challenge, computed: base64, method: 'S256' }
+      })
         }
       } else {
         if (code_verifier !== authCode.code_challenge) {
-          return new Response(JSON.stringify({
+          return respond(400, {
             error: 'invalid_grant',
             message: 'PKCE verification failed (plain)',
-            details: {
-              expected: authCode.code_challenge,
-              received: code_verifier
-            }
-          }), { status: 400, headers: { ...headers, 'Content-Type': 'application/json' } })
+            details: { expected: authCode.code_challenge }
+          })
         }
       }
     }
@@ -235,25 +224,26 @@ serve(async (req) => {
     const supakeyRefreshToken = (authCode as any).supakey_refresh_token
 
     if (!supakeyAccessToken || !supakeyRefreshToken) {
-      return new Response(JSON.stringify({
+      return respond(500, {
         error: 'server_error',
-        message: 'Authorization code missing provider tokens. Please re-authorize.'
-      }), { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } })
+        message: 'Authorization code missing provider tokens. Please re-authorize.',
+        reason: 'missing_supakey_tokens'
+      })
     }
 
     // Delete code after use
     await supabase.from('oauth_authorization_codes').delete().eq('code', code)
 
-    return new Response(JSON.stringify({
+    return respond(200, {
       access_token: supakeyAccessToken,
       refresh_token: supakeyRefreshToken,
       token_type: 'bearer',
       // Informational fields
       scope: authCode.scope,
       user_id: authCode.user_id
-    }), { status: 200, headers: { ...headers, 'Content-Type': 'application/json' } })
+    })
   } catch (e) {
     const { headers } = getCorsHeaders(req)
-    return new Response(JSON.stringify({ error: 'server_error' }), { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ error: 'server_error', message: 'Unexpected error', details: (e as Error)?.message || null }), { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } })
   }
 })

@@ -61,6 +61,12 @@ function deriveUsername(appIdentifier: string): string {
   return `${deriveSchemaName(appIdentifier)}_app`
 }
 
+// Helper function to derive a dedicated migrator role name for the schema
+function deriveMigratorRoleName(schemaName: string): string {
+  // e.g., github_com_aksanoble_hasu -> github_com_aksanoble_hasu_migrator
+  return `${schemaName}_migrator`
+}
+
 // Helper function to get or create dedicated auth user for Hasu application
 async function getOrCreateHasuAuthUser(targetAdminClient: any, userEmail: string, userPassword: string, applicationName: string, schemaName: string) {
   console.log('Getting or creating dedicated Hasu application user via admin API')
@@ -540,7 +546,7 @@ serve(async (req) => {
         console.log('Error creating application account:', accountError)
         return new Response(
           JSON.stringify({ error: 'Failed to create application account' }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } }
         )
       }
       
@@ -631,7 +637,7 @@ serve(async (req) => {
         console.log('Error creating application:', newAppError)
         return new Response(
           JSON.stringify({ error: 'Failed to create application', details: newAppError?.message ?? null }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } }
         )
       }
       
@@ -646,7 +652,7 @@ serve(async (req) => {
         console.log('Error fetching account details:', accountDetailsError)
         return new Response(
           JSON.stringify({ error: 'Failed to fetch account details' }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } }
         )
       }
       
@@ -661,14 +667,14 @@ serve(async (req) => {
       console.log('Application lookup error:', appError)
       return new Response(
         JSON.stringify({ error: 'Error looking up application' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } }
       )
     }
     
     if (!application?.application_accounts) {
       return new Response(
         JSON.stringify({ error: 'Application account not found' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } }
       )
     }
     
@@ -967,7 +973,7 @@ serve(async (req) => {
           await client.queryObject(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${schemaName} GRANT ALL ON TABLES TO authenticator;`)
           
           console.log(`Schema ${schemaName} configured for Supabase API access`)
-        
+
           // Update PostgREST configuration and apply grants
           await updatePostgRESTConfigWithRetry(userConnection.personal_access_token, userConnection.supabase_url, schemaName)
           await applySchemaGrants(client, schemaName)
@@ -981,35 +987,159 @@ serve(async (req) => {
           console.error('Schema configuration error:', schemaError.message)
           throw schemaError  // Re-throw to fail the operation if schema setup fails
         }
-        
+
+        // Create a dedicated migrator LOGIN role limited to this schema and grant minimal privileges
+        let migratorRole = deriveMigratorRoleName(schemaName)
+        const migratorPassword = cryptoRandomString({ length: 24, type: 'alphanumeric' })
+        try {
+          console.log(`Ensuring migrator role exists: ${migratorRole}`)
+          await client.queryObject(`
+            DO $$
+            BEGIN
+              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${migratorRole}') THEN
+                CREATE ROLE ${migratorRole} LOGIN PASSWORD '${migratorPassword}';
+              END IF;
+            END $$;
+          `)
+          // Always rotate the password for this invocation
+          await client.queryObject(`ALTER ROLE ${migratorRole} WITH LOGIN PASSWORD '${migratorPassword}';`)
+
+          // Allow the migrator to create objects only within this schema
+          await client.queryObject(`GRANT USAGE ON SCHEMA ${schemaName} TO ${migratorRole};`)
+          await client.queryObject(`GRANT CREATE ON SCHEMA ${schemaName} TO ${migratorRole};`)
+          
+          // Explicitly prevent the migrator from modifying any other schema (including public)
+          await client.queryObject(`
+            DO $$
+            DECLARE s text;
+            BEGIN
+              -- Revoke privileges on all schemas except the application schema and auth
+              FOR s IN 
+                SELECT nspname 
+                FROM pg_namespace 
+                WHERE nspname NOT IN ('${schemaName}', 'auth', 'pg_catalog', 'information_schema')
+              LOOP
+                EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA %I FROM %I', s, '${migratorRole}');
+                EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM %I', s, '${migratorRole}');
+              END LOOP;
+            END $$;
+          `)
+
+          // Intentionally do not touch auth schema privileges here
+          // Ensure existing objects in the schema are owned by the migrator so future ALTERs succeed
+          await client.queryObject(`
+            DO $$
+            DECLARE r RECORD;
+            BEGIN
+              FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='${schemaName}' LOOP
+                EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', '${schemaName}', r.tablename, '${migratorRole}');
+              END LOOP;
+              FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname='${schemaName}' LOOP
+                EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', '${schemaName}', r.sequencename, '${migratorRole}');
+              END LOOP;
+            END $$;
+          `)
+          console.log(`Migrator login role configured for schema: ${schemaName}`)
+        } catch (roleErr) {
+          console.error('Failed to ensure migrator role:', roleErr?.message)
+          throw roleErr
+        }
+
         // Sqitch will create its own schema and tables automatically when migrations run
         // We don't need to manually create the Sqitch tracking tables
 
-        // Set search path to application schema for migrations
-        await client.queryObject(`SET search_path TO ${schemaName}, public;`)
-        
-        // Set current user ID for migrations that need it if available
-        if (supakeyUser?.id) {
-          await client.queryObject(`SELECT set_config('app.current_user_id', '${supakeyUser.id}', false);`)
-        }
-        
-        // Deploy each new migration to the application schema (simplified to avoid deadlocks)
-        for (const migration of migrationsToRun) {
+        // Decide whether to run as migrator or fall back to the connection user if auth privileges are required
+        let runAsMigrator = true
+        const containsAuthRefs = migrationsToRun.some(m => /\bauth\./i.test(m.sql))
+        if (containsAuthRefs) {
           try {
-            console.log(`Deploying migration ${migration.name} to schema ${schemaName}`)
-            
-            // Execute the migration SQL in the application schema
-            await client.queryObject(migration.sql)
-            
-            console.log(`Successfully deployed migration: ${migration.name}`)
-          } catch (migrationError) {
-            console.error(`Error deploying migration ${migration.name}:`, migrationError)
-            throw migrationError
+            const privRes = await client.queryObject<{ usage_auth: boolean; ref_users: boolean }>(
+              `SELECT 
+                 has_schema_privilege($1::name, 'auth', 'USAGE') AS usage_auth,
+                 has_table_privilege($1::name, 'auth.users', 'REFERENCES') AS ref_users`,
+              [migratorRole]
+            )
+            const row = privRes.rows?.[0]
+            const hasAuthPrivs = !!(row && row.usage_auth && row.ref_users)
+            if (!hasAuthPrivs) {
+              console.log('Auth references detected, but migrator lacks auth privileges; falling back to connection user for migration execution')
+              runAsMigrator = false
+            }
+          } catch (checkErr) {
+            console.warn('Could not verify migrator auth privileges, falling back to connection user:', checkErr?.message)
+            runAsMigrator = false
+          }
+        }
+
+        if (runAsMigrator) {
+          // Open a dedicated connection as the migrator role and run migrations there
+          const { Client: MigratorClient } = await import('https://deno.land/x/postgres@v0.17.0/mod.ts')
+          try {
+            const pgUrl = new URL(userConnection.postgres_url)
+            pgUrl.username = encodeURIComponent(migratorRole)
+            pgUrl.password = encodeURIComponent(migratorPassword)
+            const migratorClient = new MigratorClient(pgUrl.toString())
+            console.log(`Connecting as migrator role ${migratorRole} to run migrations`)
+            await migratorClient.connect()
+
+            await migratorClient.queryObject(`SET search_path TO ${schemaName};`)
+            if (supakeyUser?.id) {
+              await migratorClient.queryObject(`SELECT set_config('app.current_user_id', '${supakeyUser.id}', false);`)
+            }
+            for (const migration of migrationsToRun) {
+              try {
+                console.log(`Deploying migration ${migration.name} to schema ${schemaName}`)
+                await migratorClient.queryObject(migration.sql)
+                console.log(`Successfully deployed migration: ${migration.name}`)
+              } catch (migrationError) {
+                console.error(`Error deploying migration ${migration.name}:`, migrationError)
+                throw migrationError
+              }
+            }
+            await migratorClient.end()
+          } catch (migratorConnErr) {
+            console.error('Failed to run migrations as migrator role:', migratorConnErr?.message)
+            throw migratorConnErr
+          }
+        } else {
+          // Run as the connection user with search_path constrained; then reassign ownership to migrator
+          await client.queryObject(`SET search_path TO ${schemaName};`)
+          if (supakeyUser?.id) {
+            await client.queryObject(`SELECT set_config('app.current_user_id', '${supakeyUser.id}', false);`)
+          }
+          for (const migration of migrationsToRun) {
+            try {
+              console.log(`Deploying migration ${migration.name} to schema ${schemaName} as connection user`)
+              await client.queryObject(migration.sql)
+              console.log(`Successfully deployed migration: ${migration.name}`)
+            } catch (migrationError) {
+              console.error(`Error deploying migration ${migration.name}:`, migrationError)
+              throw migrationError
+            }
+          }
+          try {
+            await client.queryObject(`
+              DO $$
+              DECLARE r RECORD;
+              BEGIN
+                FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='${schemaName}' LOOP
+                  EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', '${schemaName}', r.tablename, '${migratorRole}');
+                END LOOP;
+                FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname='${schemaName}' LOOP
+                  EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', '${schemaName}', r.sequencename, '${migratorRole}');
+                END LOOP;
+              END $$;
+            `)
+            console.log('Reassigned ownership of objects to migrator role after running as connection user')
+          } catch (ownErr) {
+            console.warn('Warning: failed to reassign ownership after connection-user migrations:', ownErr?.message)
           }
         }
 
         // Sample data creation moved to frontend
         // Edge function focuses on schema deployment only
+
+        // Objects created by the migrator will already be owned by it; no post-hoc reassignment needed here
 
         // After all migrations are complete, apply RLS and grants once
         if (migrationsToRun.length > 0) {
@@ -1100,7 +1230,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify(response), {
       status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      headers: { ...headers, 'Content-Type': 'application/json' }
     })
 
   } catch (error) {
@@ -1126,7 +1256,7 @@ serve(async (req) => {
         details: error.message,
         rawError: rawError
       }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 500, headers: { ...headers, 'Content-Type': 'application/json' } }
     )
   }
 })

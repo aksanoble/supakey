@@ -14,10 +14,12 @@ function getCorsHeaders(req: Request) {
   return { headers: base, allowed }
 }
 
-function html(body: string, status = 200) {
+// Simple HTML responder that applies per-request CORS headers
+function html(req: Request, body: string, status = 200) {
+  const { headers } = getCorsHeaders(req)
   return new Response(body, {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+    headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8' }
   })
 }
 
