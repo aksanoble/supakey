@@ -3,8 +3,9 @@ compatibility_date = "2025-09-06"
 
 # routes must be an array of route objects
 routes = [
-  { pattern = "supakey.app/*", custom_domain = true },
-  { pattern = "www.supakey.app/*", custom_domain = true }
+  # For custom domains, use hostnames only (no wildcards, no paths)
+  { pattern = "supakey.app", custom_domain = true },
+  { pattern = "www.supakey.app", custom_domain = true }
 ]
 
 [assets]
