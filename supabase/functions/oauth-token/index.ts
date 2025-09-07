@@ -1,17 +1,13 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') || '').split(',').map(s => s.trim()).filter(Boolean)
-function getCorsHeaders(req: Request) {
-  const origin = req.headers.get('origin') || ''
-  const allowed = ALLOWED_ORIGINS.includes(origin)
+function getCorsHeaders(_req: Request) {
   const base: Record<string, string> = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Vary': 'Origin'
+    'Access-Control-Allow-Origin': '*'
   }
-  if (allowed) base['Access-Control-Allow-Origin'] = origin
-  return { headers: base, allowed }
+  return { headers: base, allowed: true }
 }
 
 // (removed legacy json helper; all responses include CORS via getCorsHeaders)
@@ -79,7 +75,6 @@ serve(async (req) => {
     console.log('OAuth token endpoint called')
     const { headers, allowed } = getCorsHeaders(req)
     const respond = (status: number, body: Record<string, unknown>) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json' } })
-    if (!allowed) return respond(403, { error: 'origin_not_allowed', message: 'Origin is not in ALLOWED_ORIGINS', origin: req.headers.get('origin') || null })
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',

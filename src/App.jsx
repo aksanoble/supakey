@@ -1,7 +1,8 @@
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import './App.css'
 import { Profile } from './pages/Profile.jsx'
 import { Landing } from './pages/Landing.jsx'
+import { Login } from './pages/Login.jsx'
 import { OAuthAuthorize } from './pages/OAuthAuthorize.jsx'
 import { Nav } from './components/Nav.jsx'
 import { AuthProvider, useAuth } from './lib/AuthContext.jsx'
@@ -12,11 +13,10 @@ function App() {
       <div className="min-h-screen bg-gray-50">
         <BrowserRouter>
           <Routes>
-            <Route path="/login" element={<Landing />} />
+            {/* Root gate: show settings if signed in, otherwise landing */}
+            <Route path="/" element={<HomeGate />} />
+            <Route path="/login" element={<Login />} />
             <Route path="/oauth/authorize" element={<OAuthAuthorize />} />
-            <Route path="/" element={<ProtectedRoute />}>
-              <Route index element={<Profile />} />
-            </Route>
           </Routes>
         </BrowserRouter>
       </div>
@@ -24,7 +24,7 @@ function App() {
   )
 }
 
-function ProtectedRoute() {
+function HomeGate() {
   const { user, loading } = useAuth()
 
   if (loading) {
@@ -38,14 +38,14 @@ function ProtectedRoute() {
     )
   }
 
-  if (!user) {
-    return <Navigate to="/login" replace />
-  }
+  // If not signed in, show the public landing
+  if (!user) return <Landing />
 
+  // If signed in, show settings (Profile) with header
   return (
     <div>
       <Nav />
-      <Outlet />
+      <Profile />
     </div>
   )
 }

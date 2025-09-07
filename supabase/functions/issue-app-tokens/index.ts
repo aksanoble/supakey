@@ -1,17 +1,13 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') || '').split(',').map(s => s.trim()).filter(Boolean)
-function getCorsHeaders(req: Request) {
-  const origin = req.headers.get('origin') || ''
-  const allowed = ALLOWED_ORIGINS.includes(origin)
+function getCorsHeaders(_req: Request) {
   const base: Record<string, string> = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Vary': 'Origin'
+    'Access-Control-Allow-Origin': '*'
   }
-  if (allowed) base['Access-Control-Allow-Origin'] = origin
-  return { headers: base, allowed }
+  return { headers: base, allowed: true }
 }
 
 function json(body: any, status = 200, headers: Record<string, string> = { 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' }) {
@@ -24,7 +20,6 @@ function json(body: any, status = 200, headers: Record<string, string> = { 'Acce
 serve(async (req) => {
   const { headers, allowed } = getCorsHeaders(req)
   if (req.method === 'OPTIONS') return new Response('ok', { headers })
-  if (!allowed) return json({ error: 'origin_not_allowed' }, 403, headers)
 
   try {
     const supabaseAdmin = createClient(

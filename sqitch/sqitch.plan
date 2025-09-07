@@ -14,3 +14,5 @@ add_oauth_tables 2025-08-25T13:00:00Z System Administrator <root@medha> # Add OA
 add_oauth_client_registration_policy 2025-08-25T18:32:28Z System Administrator <root@medha> # Add policy to allow dynamic OAuth client registration
 add_oauth_token_columns 2025-09-01T00:00:00Z System Administrator <root@medha> # Store Supakey tokens with authorization codes
 remove_application_migrations 2025-09-05T12:00:00Z System Administrator <root@medha> # Drop central application_migrations tracking and related objects
+add_early_access_requests 2025-09-06T00:00:00Z System Administrator <root@medha> # Track early access requests and invitation status
+grant_anon_usage_for_early_access 2025-09-06T01:00:00Z System Administrator <root@medha> # Grant anon USAGE on supakey schema and INSERT into early_access_requests
