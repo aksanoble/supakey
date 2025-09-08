@@ -19,18 +19,15 @@ export function Landing() {
     }
     setSubmitting(true);
     try {
-      const { error } = await supabase
-        .from('early_access_requests')
-        .insert({ email });
+      const { error } = await supabase.from('early_access_requests').insert({ email })
       if (error) {
-        // Unique violation => already requested
         if (String(error.code) === '23505') {
-          setSubmitted(true);
-          setMessage("You're already on the early access list. Thanks!");
+          setSubmitted(true)
+          setMessage("You're already on the early access list. Thanks!")
         } else {
-          setMessage(error.message || 'Unable to submit request');
+          setMessage(error.message || 'Unable to submit request')
         }
-        return;
+        return
       }
       setSubmitted(true);
       setMessage("Thanks! Your early access request has been received. We'll be in touch.");
@@ -44,7 +41,7 @@ export function Landing() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <Nav />
-      <main className="flex-1 flex">
+      <main className="flex-1 flex lg:min-h-[82vh] pb-4">
         {/* Left side - Landing content */}
         <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-blue-600 to-blue-800 flex-col justify-center px-12">
           <div className="max-w-md mx-auto text-white">
@@ -102,6 +99,7 @@ export function Landing() {
               <span>Keep your data in your own account</span>
             </div>
           </div>
+          {/* Large screens: retain hero without inline video */}
         </div>
       </div>
 
@@ -113,6 +111,7 @@ export function Landing() {
               Be the first to know when Supakey opens up.
             </p>
           </div>
+          {/* Small screens: no inline video here; shown at bottom */}
           <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
             <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
               <form className="space-y-6" onSubmit={onWaitlist}>
@@ -138,6 +137,23 @@ export function Landing() {
           </div>
         </div>
       </main>
+      {/* Bottom video section */}
+      <section className="pt-3 pb-4 px-4 bg-gray-50">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white shadow sm:rounded-lg overflow-hidden">
+            <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
+              <iframe
+                className="absolute top-0 left-0 w-full h-full"
+                src="https://www.youtube.com/embed/LQ0l40H3Z50?rel=0"
+                title="Supakey demo"
+                frameBorder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </div>
+      </section>
       <footer className="py-8 text-center text-sm text-gray-500">© Supakey •
         <a href="mailto:akshay@kanthi.io" aria-label="Email" className="inline-flex items-center justify-center align-middle text-gray-500 hover:text-gray-700 ml-2 mr-3">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" className="block">

@@ -87,7 +87,8 @@ jspm_packages/
 
 # Gatsby files
 .cache/
-public
+# Do not ignore Vite's public assets directory
+# (was 'public' here, which prevented deploying static assets like images)
 
 # Storybook build outputs
 .out
