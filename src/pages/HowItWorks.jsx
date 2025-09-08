@@ -12,7 +12,7 @@ export function HowItWorks() {
             and issues app‑scoped user tokens so apps connect directly to your data.
           </p>
 
-          <div className="mt-8 bg-white rounded-xl shadow-sm ring-1 ring-gray-200 p-4">
+          <div className="mt-8 w-full max-w-3xl mx-auto bg-white rounded-xl shadow-sm ring-1 ring-gray-200 p-4">
             <img src="/images/how-it-works.png" alt="App ↔ Supakey ↔ Your Supabase" className="w-full h-auto" />
             <p className="text-center text-sm text-gray-500 mt-3">Architecture: App ↔ Supakey ↔ Your Supabase</p>
           </div>
