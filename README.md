@@ -90,14 +90,14 @@ Register a client:
 
 ```sql
 insert into supakey.oauth_clients (client_id, client_name, redirect_uri, app_identifier)
-values ('hasu-web', 'Hasu Web', 'http://localhost:3000', 'github.com/aksanoble/hasu')
+values ('your_app-web', 'your_app Web', 'http://localhost:3000', 'github.com/aksanoble/your_app')
   on conflict (client_id) do update set redirect_uri = excluded.redirect_uri;
 ```
 
 Authorize URL example:
 
 ```
-${VITE_SUPABASE_URL}/functions/v1/oauth-authorize?client_id=hasu-web&redirect_uri=http://localhost:3000&response_type=code&state=xyz&code_challenge=...&code_challenge_method=S256&app_identifier=github.com/aksanoble/hasu
+${VITE_SUPABASE_URL}/functions/v1/oauth-authorize?client_id=your_app-web&redirect_uri=http://localhost:3000&response_type=code&state=xyz&code_challenge=...&code_challenge_method=S256&app_identifier=github.com/aksanoble/your_app
 ```
 
 Token exchange:
@@ -116,10 +116,10 @@ POST ${VITE_SUPABASE_URL}/functions/v1/oauth-token
 - Disable signups in the Supabase Auth settings for the Supakey project (Auth → Providers → Email → uncheck “Allow new users to sign up”).
 - Configure CORS allowlist for edge functions by setting the `ALLOWED_ORIGINS` project env (Functions → Variables):
   - Dev: `ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000`
-  - Prod: `ALLOWED_ORIGINS=https://supakey.yourdomain.com,https://hasu.yourdomain.com`
+  - Prod: `ALLOWED_ORIGINS=https://supakey.yourdomain.com,https://your_app.yourdomain.com`
 - Deploy functions (requires Supabase CLI and access token):
   - `supabase functions deploy oauth-token oauth-authorize issue-app-tokens deploy-migrations connection-status --project-ref <PROJECT_REF>`
 - Verify RLS on `supakey.*` tables is enabled and policies scope by `auth.uid()` (see `sqitch/deploy/init.sql` and `sqitch/deploy/add_oauth_tables.sql`).
 - Never commit real secrets. Use `.env.example` files and set real values in your environment:
   - `supakey/.env.example`
-  - `hasu/.env.example`
+  - `your_app/.env.example`

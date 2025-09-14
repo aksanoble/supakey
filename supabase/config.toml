@@ -26,3 +26,10 @@ entrypoint = "./functions/deploy-migrations/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/connection-status/index.ts"
+
+
+[functions.notify-early-access]
+enabled = true
+# Expose publicly; secured by internal secret header
+verify_jwt = false
+entrypoint = "./functions/notify-early-access/index.ts"
