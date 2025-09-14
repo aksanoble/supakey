@@ -34,8 +34,8 @@ export function AuthProvider({ children }) {
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log('Auth event:', event, session?.user?.email)
+      async (_event, session) => {
+        console.log('Auth event:', _event, session?.user?.email)
         setUser(session?.user ?? null)
         setLoading(false)
       }
@@ -72,11 +72,52 @@ export function AuthProvider({ children }) {
     }
   }
 
+  const signInWithProvider = async ({ provider, redirectTo, scopes }) => {
+    setLoading(true)
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo,
+          scopes
+        }
+      })
+      if (error) throw error
+      return { data, error: null }
+    } catch (error) {
+      return { data: null, error }
+    } finally {
+      // Do not set loading false immediately; OAuth will redirect away.
+      setLoading(false)
+    }
+  }
+
+  const linkProvider = async ({ provider, redirectTo, scopes }) => {
+    setLoading(true)
+    try {
+      const { data, error } = await supabase.auth.linkIdentity({
+        provider,
+        options: {
+          redirectTo,
+          scopes
+        }
+      })
+      if (error) throw error
+      return { data, error: null }
+    } catch (error) {
+      return { data: null, error }
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const value = {
     user,
     loading,
     signIn,
-    signOut
+    signOut,
+    signInWithProvider,
+    linkProvider
   }
 
   return (

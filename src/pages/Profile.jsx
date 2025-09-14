@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 
@@ -13,13 +13,20 @@ export function Profile() {
   });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(location.state?.message || "");
+  const [loaded, setLoaded] = useState(false);
+  const [missingFields, setMissingFields] = useState([]);
+  const REQUIRED_KEYS = [
+    'supabase_url',
+    'supabase_anon_key',
+    'supabase_secret_key',
+    'personal_access_token',
+    'postgres_url'
+  ];
 
   useEffect(() => {
     let isMounted = true;
     async function load() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       const { data: dataArray, error } = await supabase
         .from("user_connections")
@@ -41,6 +48,7 @@ export function Profile() {
           personal_access_token: "",
         }));
       }
+      setLoaded(true);
     }
     load();
     return () => {
@@ -48,25 +56,53 @@ export function Profile() {
     };
   }, []);
 
+  // Build banner message from actual missing fields (ignore stale router state)
+  const bannerMessage = useMemo(() => {
+    if (!loaded) return "";
+    const missing = Array.isArray(missingFields) ? missingFields : [];
+    if (missing.length === 0) return "";
+    if (missing.length === REQUIRED_KEYS.length) {
+      return "Please complete your connection settings before authorizing applications.";
+    }
+    return `Please complete your connection settings (${missing.join(', ')}) before authorizing applications.`;
+  }, [loaded, missingFields]);
+
+  // Fetch connection completeness via edge function (booleans only)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke('connection-status', { body: {} });
+        if (error) return; // ignore and leave as-is
+        if (!cancelled) setMissingFields(Array.isArray(data?.missing) ? data.missing : []);
+      } catch (_) {
+        // ignore
+      }
+    })();
+    return () => { cancelled = true };
+  }, []);
+
+  
+
   async function onSubmit(e) {
     e.preventDefault();
     setLoading(true);
     setMessage("");
 
-    // Validate all required fields
-    // Only require non-sensitive fields on the client.
-    // Secret key and PAT can be set without being read back; leave blank to keep existing.
-    const requiredFields = [
-      { field: "supabase_url", name: "Supabase URL" },
-      { field: "supabase_anon_key", name: "Supabase Anon Key" },
-    ];
-
-    for (const { field, name } of requiredFields) {
-      if (!form[field] || !form[field].trim()) {
-        setMessage(`${name} is required`);
-        setLoading(false);
-        return;
-      }
+    // Require all missing fields to be provided before saving
+    const req = Array.isArray(missingFields) ? missingFields : [];
+    const firstMissing = req.find((f) => !form[f] || !String(form[f]).trim());
+    if (firstMissing) {
+      const displayName = (
+        firstMissing === 'supabase_url' ? 'Supabase URL' :
+        firstMissing === 'supabase_anon_key' ? 'Supabase Anon Key' :
+        firstMissing === 'supabase_secret_key' ? 'Supabase Secret Key' :
+        firstMissing === 'personal_access_token' ? 'Personal Access Token' :
+        firstMissing === 'postgres_url' ? 'Postgres URL' : firstMissing
+      );
+      setMessage(`${displayName} is required`);
+      setLoading(false);
+      return;
     }
 
     const {
@@ -95,6 +131,11 @@ export function Profile() {
     if (error) setMessage(error.message);
     else {
       setMessage("Settings saved successfully");
+      // Refresh connection status to hide banner immediately if complete
+      try {
+        const { data } = await supabase.functions.invoke('connection-status', { body: {} });
+        setMissingFields(Array.isArray(data?.missing) ? data.missing : []);
+      } catch (_) { /* ignore */ }
       // Check if we need to redirect back to OAuth flow
       const oauthParams = sessionStorage.getItem("oauth_params");
       if (oauthParams) {
@@ -108,20 +149,51 @@ export function Profile() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+    <>
+      <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
       <div className="px-4 py-6 sm:px-0">
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h2 className="text-lg font-medium text-gray-900 mb-6">
               User Connection Settings
             </h2>
+            {bannerMessage && (
+              <div className="mb-4 p-4 rounded-md bg-red-50 border border-red-200 text-red-700 text-sm">
+                {bannerMessage}
+              </div>
+            )}
+            <div className="mb-6 p-4 rounded-md bg-yellow-50 border border-yellow-200 text-yellow-800 text-sm">
+              <div className="flex items-start gap-3 text-left">
+                <div className="flex-shrink-0 mt-0.5">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    className="h-5 w-5"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 100-2 1 1 0 000 2zm-1 2a1 1 0 012 0v5a1 1 0 11-2 0V9z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </div>
+                <div className="space-y-1">
+                  <p className="font-medium">We’re still in early beta.</p>
+                  <p className="leading-snug">Please use a test Supabase project — no critical use cases yet.</p>
+                </div>
+              </div>
+            </div>
+            
+
             <form onSubmit={onSubmit} className="space-y-6">
               <div>
                 <label
                   htmlFor="postgres_url"
                   className="block text-sm font-medium text-gray-700"
                 >
-                  Postgres URL (user-level)
+                  Postgres URL (user-level) <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="postgres_url"
@@ -229,27 +301,22 @@ export function Profile() {
               <div>
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || (Array.isArray(missingFields) && missingFields.some((f) => !form[f] || !String(form[f]).trim()))}
                   className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {loading ? "Saving..." : "Save Settings"}
                 </button>
               </div>
             </form>
-            {message && (
-              <div
-                className={`mt-4 p-4 rounded-md text-sm ${
-                  message.includes("saved successfully")
-                    ? "bg-green-50 text-green-700 border border-green-200"
-                    : "bg-red-50 text-red-700 border border-red-200"
-                }`}
-              >
+            {message && message.includes("saved successfully") && (
+              <div className="mt-4 p-4 rounded-md text-sm bg-green-50 text-green-700 border border-green-200">
                 {message}
               </div>
             )}
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

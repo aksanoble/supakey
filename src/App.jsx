@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import './App.css'
 import { Profile } from './pages/Profile.jsx'
 import { Landing } from './pages/Landing.jsx'
-import { Login } from './pages/Login.jsx'
 import { OAuthAuthorize } from './pages/OAuthAuthorize.jsx'
 import { HowItWorks } from './pages/HowItWorks.jsx'
 import { Nav } from './components/Nav.jsx'
@@ -16,7 +15,7 @@ function App() {
           <Routes>
             {/* Root gate: show settings if signed in, otherwise landing */}
             <Route path="/" element={<HomeGate />} />
-            <Route path="/login" element={<Login />} />
+            {/* Sign-in handled on Landing; no separate /login */}
             <Route path="/oauth/authorize" element={<OAuthAuthorize />} />
             <Route path="/how-it-works" element={<HowItWorks />} />
           </Routes>

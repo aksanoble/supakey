@@ -4,7 +4,7 @@ import { useAuth } from '../lib/AuthContext'
 export function Nav() {
 	const { user, signOut } = useAuth()
 	const location = useLocation()
-	const isLogin = location.pathname === '/login'
+	const onLanding = location.pathname === '/'
 
 	const handleSignOut = async () => {
 		await signOut()
@@ -20,7 +20,7 @@ export function Nav() {
 						</Link>
 					</div>
 					<div className="flex items-center gap-4">
-						<a href="/how-it-works" className="hidden sm:inline text-sm text-gray-600 hover:text-gray-900">How it works</a>
+						<Link to="/how-it-works" className="text-sm text-gray-600 hover:text-gray-900">How it works</Link>
 						{user ? (
 							<button 
 								onClick={handleSignOut}
@@ -28,8 +28,8 @@ export function Nav() {
 							>
 								Sign out
 							</button>
-						) : (!isLogin && (
-							<Link to="/login" className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors">
+						) : (!onLanding && (
+							<Link to="/" className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors">
 								Sign in
 							</Link>
 						))}

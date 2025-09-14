@@ -16,3 +16,18 @@ add_oauth_token_columns 2025-09-01T00:00:00Z System Administrator <root@medha> #
 remove_application_migrations 2025-09-05T12:00:00Z System Administrator <root@medha> # Drop central application_migrations tracking and related objects
 add_early_access_requests 2025-09-06T00:00:00Z System Administrator <root@medha> # Track early access requests and invitation status
 grant_anon_usage_for_early_access 2025-09-06T01:00:00Z System Administrator <root@medha> # Grant anon USAGE on supakey schema and INSERT into early_access_requests
+add_early_access_telegram_notify 2025-09-07T00:00:00Z System Administrator <root@medha> # Direct Telegram notify via pg_net (legacy)
+add_early_access_function_trigger 2025-09-07T01:00:00Z System Administrator <root@medha> # Trigger posts to private edge function for notifications
+remove_legacy_telegram_notify 2025-09-07T02:00:00Z System Administrator <root@medha> # Drop old direct Telegram notify fn; keep only edge function path
+reset_early_access_triggers 2025-09-07T03:00:00Z System Administrator <root@medha> # Ensure exactly one trigger points to notify_edge_early_access
+harden_app_settings_rls 2025-09-07T04:00:00Z System Administrator <root@medha> # Enable RLS and revoke broad grants on app_settings
+update_notify_edge_headers 2025-09-07T05:00:00Z System Administrator <root@medha> # Include x-email header; function accepts header/query fallback
+update_notify_edge_query_params 2025-09-07T06:00:00Z System Administrator <root@medha> # Append email + secret in URL query to survive pg_net header/body stripping
+harden_app_settings_rls_v2 2025-09-07T07:00:00Z System Administrator <root@medha> # Follow-up: enforce RLS & revoke grants via new migration (no edits to old)
+fix_notify_trigger_params 2025-09-07T14:17:48Z medha <medha@medha> # Fix net.http_post parameters in notify trigger function
+fix_notify_http_call 2025-09-07T14:23:17Z medha <medha@medha> # Fix pg_net http_post call to use proper headers vs params
+fix_notify_email_param 2025-09-07T15:31:39Z medha <medha@medha> # Send email as URL parameter to work around pg_net body issue
+fix_notify_http_post_signature 2025-09-07T15:32:58Z medha <medha@medha> # Fix net.http_post parameter types
+fix_notify_param_order 2025-09-07T15:33:56Z medha <medha@medha> # Fix net.http_post parameter order
+add_auth_activity_notify_triggers 2025-09-13T00:00:00Z System Administrator <root@medha> # Notify on auth signup/signin via Edge function
+fix_auth_activity_notify_http_post 2025-09-14T00:00:00Z System Administrator <root@medha> # Use correct pg_net http_post signature and send both body+params

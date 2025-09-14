@@ -64,9 +64,10 @@ export function OAuthAuthorize() {
           code_challenge_method: codeChallengeMethod,
           app_identifier: appIdentifier
         }))
-        
+
         const missing = Array.isArray(statusRes?.missing) ? statusRes.missing : []
-        const msg = missing.length
+        const REQUIRED_KEYS = ['supabase_url','supabase_anon_key','supabase_secret_key','personal_access_token','postgres_url']
+        const msg = missing.length && missing.length < REQUIRED_KEYS.length
           ? `Please complete your connection settings (${missing.join(', ')}) before authorizing applications.`
           : 'Please complete your connection settings before authorizing applications.'
         navigate('/', { state: { message: msg } })
@@ -251,7 +252,7 @@ export function OAuthAuthorize() {
     sessionStorage.setItem('oauth_params', JSON.stringify(paramsObj))
     // Also forward params via URL so redirect works even if sessionStorage is blocked
     const qs = new URLSearchParams(paramsObj).toString()
-    navigate(`/login?${qs}`)
+    navigate(`/?${qs}`)
   }
 
   // Strict guard: if user is not authenticated, immediately redirect to login
