@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext.jsx'
 import { supabase } from '../lib/supabaseClient'
+import { storeOAuthParams } from '../lib/oauthParams'
 
 export function OAuthAuthorize() {
   const [searchParams] = useSearchParams()
@@ -54,7 +55,7 @@ export function OAuthAuthorize() {
       
       if (!hasCompleteConnection) {
         // Store OAuth parameters and redirect to profile setup
-        sessionStorage.setItem('oauth_params', JSON.stringify({
+        storeOAuthParams({
           client_id: clientId,
           redirect_uri: redirectUri,
           response_type: responseType,
@@ -63,7 +64,7 @@ export function OAuthAuthorize() {
           code_challenge: codeChallenge,
           code_challenge_method: codeChallengeMethod,
           app_identifier: appIdentifier
-        }))
+        })
 
         const missing = Array.isArray(statusRes?.missing) ? statusRes.missing : []
         const REQUIRED_KEYS = ['supabase_url','supabase_anon_key','supabase_secret_key','personal_access_token','postgres_url']
@@ -249,7 +250,7 @@ export function OAuthAuthorize() {
       code_challenge_method: codeChallengeMethod,
       app_identifier: appIdentifier
     }
-    sessionStorage.setItem('oauth_params', JSON.stringify(paramsObj))
+    storeOAuthParams(paramsObj)
     // Also forward params via URL so redirect works even if sessionStorage is blocked
     const qs = new URLSearchParams(paramsObj).toString()
     navigate(`/?${qs}`)

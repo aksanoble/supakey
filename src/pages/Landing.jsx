@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Nav } from "../components/Nav.jsx";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../lib/AuthContext.jsx";
+import { storeOAuthParams, getStoredOAuthParams, clearOAuthParams } from "../lib/oauthParams.js";
 import { OAuthButtons } from "../components/OAuthButtons.jsx";
 
 export function Landing() {
@@ -29,6 +30,11 @@ export function Landing() {
   }, [searchParams]);
 
   // No landing banner: suppress connection-state messages here.
+  // Persist any inbound OAuth params (for robustness across redirects)
+  useEffect(() => {
+    const params = Object.fromEntries(searchParams.entries());
+    storeOAuthParams(params);
+  }, [searchParams]);
 
   // After sign-in, route appropriately
   useEffect(() => {
@@ -74,10 +80,11 @@ export function Landing() {
           return;
         }
 
-        const stored = sessionStorage.getItem("oauth_params");
+        // Fallback to stored params (session/local)
+        const stored = getStoredOAuthParams();
         if (stored) {
-          sessionStorage.removeItem("oauth_params");
-          const params = new URLSearchParams(JSON.parse(stored));
+          clearOAuthParams();
+          const params = new URLSearchParams(stored);
           navigate(`/oauth/authorize?${params.toString()}`);
           return;
         }
